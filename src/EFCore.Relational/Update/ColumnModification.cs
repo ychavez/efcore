@@ -32,6 +32,7 @@ public class ColumnModification : IColumnModification
     private object? _value;
     private readonly bool _sensitiveLoggingEnabled;
     private List<IColumnModification>? _sharedColumnModifications;
+    private readonly string? _jsonPath;
 
     /// <summary>
     ///     Creates a new <see cref="ColumnModification" /> instance.
@@ -54,6 +55,7 @@ public class ColumnModification : IColumnModification
         IsNullable = columnModificationParameters.IsNullable;
         _generateParameterName = columnModificationParameters.GenerateParameterName;
         Entry = columnModificationParameters.Entry;
+        _jsonPath = columnModificationParameters.JsonPath;
 
         UseParameter = _generateParameterName != null;
     }
@@ -173,6 +175,9 @@ public class ColumnModification : IColumnModification
             }
         }
     }
+
+    /// <inheritdoc />
+    public virtual string? JsonPath { get; }
 
     /// <inheritdoc />
     public virtual void AddSharedColumnModification(IColumnModification modification)

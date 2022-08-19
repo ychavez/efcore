@@ -257,6 +257,7 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
         var updating = state == EntityState.Modified;
         var columnModifications = new List<IColumnModification>();
         Dictionary<string, ColumnValuePropagator>? sharedTableColumnMap = null;
+        var jsonEntry = false;
 
         if (_entries.Count > 1
             || (_entries.Count == 1 && _entries[0].SharedIdentityEntry != null))
@@ -290,8 +291,55 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
                 }
 
                 InitializeSharedColumns(entry, tableMapping, updating, sharedTableColumnMap);
+
+                if (!jsonEntry && entry.EntityType.IsMappedToJson())
+                {
+                    jsonEntry = true;
+                }
             }
         }
+
+
+        var jsonPathLcd = new Dictionary<string, List<(string, IUpdateEntry?)>>();
+        if (jsonEntry)
+        {
+            foreach (var entry in _entries.Where(e => e.EntityType.IsMappedToJson()))
+            {
+                var modifiedMembers = entry.ToEntityEntry().Members.Where(m => m is not NavigationEntry && m.IsModified).ToList();
+                var jsonColumn = entry.EntityType.GetContainerColumnName()!;
+
+                var jsonPath = FindJsonPath(entry);
+                if (modifiedMembers.Count == 1)
+                {
+                    jsonPath.Add((((IProperty)modifiedMembers.Single().Metadata).GetJsonPropertyName()!, null));
+                }
+
+                if (jsonPathLcd.TryGetValue(jsonColumn, out var currentLcd))
+                {
+                    jsonPath = FindCommonDenominatorPath(currentLcd, jsonPath);
+                    // compare with current
+                }
+
+                jsonPathLcd[jsonColumn] = jsonPath;
+            }
+
+            //foreach (var (column, (path, entry)) in jsonPathLcd)
+            //{
+
+
+            //    // find entry 
+            //}
+
+
+
+
+
+
+
+
+
+        }
+
 
         var processedJsonNavigations = new List<INavigation>();
         foreach (var entry in _entries)
@@ -526,6 +574,57 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
         }
 
         return columnModifications;
+
+
+        List<(string, IUpdateEntry?)> FindJsonPath(IUpdateEntry entry)
+        {
+            var result = new List<(string, IUpdateEntry?)>();
+
+            var currentEntry = entry;
+            var currentOwnership = currentEntry.EntityType.FindOwnership()!;
+            while (currentEntry.EntityType.IsMappedToJson())
+            {
+                var jsonPropertyName = currentEntry.EntityType.GetJsonPropertyName()!;
+
+                currentOwnership = currentEntry.EntityType.FindOwnership()!;
+                var previousEntry = currentEntry;
+#pragma warning disable EF1001 // Internal EF Core API usage.
+                currentEntry = ((InternalEntityEntry)currentEntry).StateManager.FindPrincipal((InternalEntityEntry)currentEntry, currentOwnership)!;
+#pragma warning restore EF1001 // Internal EF Core API usage.
+
+                if (!currentOwnership.IsUnique)
+                {
+                    var ordinalProperty = previousEntry.EntityType.FindPrimaryKey()!.Properties.Last();
+                    var ordinalKeyValue = (int)previousEntry.GetCurrentProviderValue(ordinalProperty)!;
+                    result.Insert(0, ($"{jsonPropertyName}[{ordinalKeyValue - 1}]", previousEntry));
+                }
+                else
+                {
+                    result.Insert(0, (jsonPropertyName, previousEntry));
+                }
+            }
+
+            return result;
+        }
+
+        List<(string, IUpdateEntry?)> FindCommonDenominatorPath(List<(string, IUpdateEntry?)> first, List<(string, IUpdateEntry?)> second)
+        {
+            var resultPath = new List<(string, IUpdateEntry?)>();
+            for (var i = 0; i < Math.Min(first.Count, second.Count); i++)
+            {
+                if (first[i].Item1 == second[i].Item1)
+                {
+                    resultPath.Add(first[i]);
+                }
+                else
+                {
+                    // TODO: do something smarter for collections
+                    break;
+                }
+            }
+
+            return resultPath;
+        }
     }
 
     private JsonNode? CreateJson(object? navigationValue, IUpdateEntry parentEntry, IEntityType entityType, int? ordinal, bool isCollection)
