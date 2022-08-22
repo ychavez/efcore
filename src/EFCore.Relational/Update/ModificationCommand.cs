@@ -716,6 +716,12 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
                 }
             }
 
+            // parent entity got deleted, no need to do any json-specific processing
+            if (currentEntry.EntityState == EntityState.Deleted)
+            {
+                return null;
+            }
+
             return result;
         }
 

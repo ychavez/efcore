@@ -328,7 +328,7 @@ public abstract class UpdateSqlGenerator : IUpdateSqlGenerator
                         var blah = o.TypeMapping!.GenerateSqlLiteral(o.JsonPath);
 
                         //sb.Append(o.TypeMapping!.GenerateSqlLiteral(o.JsonPath));
-                        sb.Append("'" + o.JsonPath + "'");
+                        sb.Append("'strict " + o.JsonPath + "'");
                         sb.Append(", ");
 
 

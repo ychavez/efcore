@@ -141,7 +141,7 @@ public abstract class JsonUpdateTestBase: SharedStoreFixtureBase<JsonQueryContex
                 var query = await context.JsonEntitiesBasic.ToListAsync();
                 var entity = query.Single();
 
-                Assert.Null(entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedCollectionLeaf);
+                Assert.Null(entity.OwnedReferenceRoot.OwnedCollectionBranch[0].OwnedReferenceLeaf);
                 var newLeaf = new JsonOwnedLeaf { SomethingSomething = "ss3" };
                 entity.OwnedReferenceRoot.OwnedCollectionBranch[0].OwnedReferenceLeaf = newLeaf;
                 
@@ -150,7 +150,7 @@ public abstract class JsonUpdateTestBase: SharedStoreFixtureBase<JsonQueryContex
             async context =>
             {
                 var updatedEntity = await context.JsonEntitiesBasic.SingleAsync();
-                var updatedReference = updatedEntity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedReferenceLeaf;
+                var updatedReference = updatedEntity.OwnedReferenceRoot.OwnedCollectionBranch[0].OwnedReferenceLeaf;
                 Assert.Equal("ss3", updatedReference.SomethingSomething);
             });
 

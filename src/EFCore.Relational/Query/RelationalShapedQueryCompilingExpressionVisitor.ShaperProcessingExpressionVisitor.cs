@@ -2395,22 +2395,6 @@ public partial class RelationalShapedQueryCompilingExpressionVisitor
                 {
                     newKeyPropertyValues[^1] = ++i;
 
-                    try
-                    {
-                        var resultElement2 = innerShaper(queryContext, newKeyPropertyValues, jsonArrayElement);
-                        fixup(entity, resultElement2);
-
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex);
-
-                        var resultElement3 = innerShaper(queryContext, newKeyPropertyValues, jsonArrayElement);
-                        fixup(entity, resultElement3);
-
-                    }
-
                     var resultElement = innerShaper(queryContext, newKeyPropertyValues, jsonArrayElement);
 
                     fixup(entity, resultElement);
