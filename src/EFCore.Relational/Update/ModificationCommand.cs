@@ -409,6 +409,8 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
 
                             break;
                         }
+
+                        i++;
                     }
                 }
                 else
