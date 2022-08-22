@@ -133,7 +133,7 @@ public abstract class JsonUpdateTestBase: SharedStoreFixtureBase<JsonQueryContex
             {
                 var query = await context.JsonEntitiesBasic.ToListAsync();
                 var entity = query.Single();
-                entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedCollectionLeaf = null;
+                entity.OwnedReferenceRoot.OwnedCollectionBranch[0].OwnedReferenceLeaf = null;
                 await context.SaveChangesAsync();
             },
             async context =>
@@ -143,7 +143,7 @@ public abstract class JsonUpdateTestBase: SharedStoreFixtureBase<JsonQueryContex
 
                 Assert.Null(entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedCollectionLeaf);
                 var newLeaf = new JsonOwnedLeaf { SomethingSomething = "ss3" };
-                entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedReferenceLeaf = newLeaf;
+                entity.OwnedReferenceRoot.OwnedCollectionBranch[0].OwnedReferenceLeaf = newLeaf;
                 
                 await context.SaveChangesAsync();
             },
@@ -455,6 +455,52 @@ public abstract class JsonUpdateTestBase: SharedStoreFixtureBase<JsonQueryContex
                 Assert.Equal("ss1", collectionLeaf[0].SomethingSomething);
                 Assert.Equal("ss2", collectionLeaf[1].SomethingSomething);
             });
+
+    [ConditionalFact]
+    public virtual Task Edit_element_in_json_multiple_levels_partial_update()
+        => TestHelpers.ExecuteWithStrategyInTransactionAsync(
+            CreateContext,
+            UseTransaction,
+            async context =>
+            {
+                var query = await context.JsonEntitiesBasic.ToListAsync();
+                var entity = query.Single();
+                entity.OwnedReferenceRoot.OwnedReferenceBranch.Date = new DateTime(2111, 11, 11);
+                entity.OwnedCollectionRoot[0].OwnedCollectionBranch[1].OwnedCollectionLeaf[0].SomethingSomething = "yet another change";
+                await context.SaveChangesAsync();
+            },
+            async context =>
+            {
+                var result = await context.Set<JsonEntityBasic>().SingleAsync();
+                Assert.Equal(new DateTime(2111, 11, 11), result.OwnedReferenceRoot.OwnedReferenceBranch.Date);
+                Assert.Equal("yet another change", result.OwnedCollectionRoot[0].OwnedCollectionBranch[1].OwnedCollectionLeaf[0].SomethingSomething);
+            });
+
+    [ConditionalFact]
+    public virtual Task Edit_element_in_json_multiple_levels_partial_update2()
+        => TestHelpers.ExecuteWithStrategyInTransactionAsync(
+            CreateContext,
+            UseTransaction,
+            async context =>
+            {
+                var query = await context.JsonEntitiesBasic.ToListAsync();
+                var entity = query.Single();
+                entity.OwnedReferenceRoot.OwnedReferenceBranch.Date = new DateTime(2111, 11, 11);
+                entity.OwnedReferenceRoot.OwnedReferenceBranch.Fraction = 1234.56m;
+                entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedReferenceLeaf.SomethingSomething = "blah";
+                entity.OwnedReferenceRoot.OwnedReferenceBranch.OwnedCollectionLeaf[0].SomethingSomething = "sumtin'";
+                entity.OwnedCollectionRoot[0].OwnedCollectionBranch[1].OwnedCollectionLeaf[0].SomethingSomething = "yet another change";
+                await context.SaveChangesAsync();
+            },
+            async context =>
+            {
+                var result = await context.Set<JsonEntityBasic>().SingleAsync();
+                Assert.Equal(new DateTime(2111, 11, 11), result.OwnedReferenceRoot.OwnedReferenceBranch.Date);
+                Assert.Equal("yet another change", result.OwnedCollectionRoot[0].OwnedCollectionBranch[1].OwnedCollectionLeaf[0].SomethingSomething);
+            });
+
+
+
 
     public void UseTransaction(DatabaseFacade facade, IDbContextTransaction transaction)
         => facade.UseTransaction(transaction.GetDbTransaction());

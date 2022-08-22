@@ -6,6 +6,7 @@ using System.Data;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore.ChangeTracking.Internal;
 using Microsoft.EntityFrameworkCore.Internal;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using IColumnMapping = Microsoft.EntityFrameworkCore.Metadata.IColumnMapping;
 using ITableMapping = Microsoft.EntityFrameworkCore.Metadata.ITableMapping;
@@ -250,6 +251,57 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
     protected virtual IColumnModification CreateColumnModification(in ColumnModificationParameters columnModificationParameters)
         => new ColumnModification(columnModificationParameters);
 
+
+
+    private abstract class JsonPartialUpdateInfoBase
+    {
+        public List<string> JsonPath { get; } = new();
+    }
+
+
+
+    private class JsonPartialUpdateInfo
+    {
+        public JsonPartialUpdateInfo(IUpdateEntry parentEntry, INavigation navigation)
+        {
+            ParentEntry = parentEntry;
+            Navigation = navigation;
+        }
+
+        public List<string> JsonPath { get; } = new();
+        public IUpdateEntry ParentEntry { get; }
+        public INavigation Navigation { get; }
+
+        public int? FinalOrdinal { get; set; }
+
+        public IProperty? Property { get; set; }
+        public JsonValue? PropertyValue { get; set; }
+    }
+
+    private class JsonPartialUpdateSingleElementInfo : JsonPartialUpdateInfoBase
+    {
+        public JsonPartialUpdateSingleElementInfo(IUpdateEntry entryToUpdate)
+        {
+            EntryToUpdate = entryToUpdate;
+        }
+
+        public IUpdateEntry EntryToUpdate { get; }
+
+        public IProperty? Property { get; set; }
+    }
+
+    private class JsonPartialUpdateCollectionInfo : JsonPartialUpdateInfoBase
+    {
+        public JsonPartialUpdateCollectionInfo(IUpdateEntry parentEntry, INavigation navigation)
+        {
+            ParentEntry = parentEntry;
+            Navigation = navigation;
+        }
+
+        public IUpdateEntry ParentEntry { get; }
+        public INavigation Navigation { get; }
+    }
+
     private List<IColumnModification> GenerateColumnModifications()
     {
         var state = EntityState;
@@ -257,6 +309,7 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
         var updating = state == EntityState.Modified;
         var columnModifications = new List<IColumnModification>();
         Dictionary<string, ColumnValuePropagator>? sharedTableColumnMap = null;
+        var jsonEntry = false;
 
         if (_entries.Count > 1
             || (_entries.Count == 1 && _entries[0].SharedIdentityEntry != null))
@@ -290,74 +343,134 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
                 }
 
                 InitializeSharedColumns(entry, tableMapping, updating, sharedTableColumnMap);
+
+                if (!jsonEntry && entry.EntityType.IsMappedToJson())
+                {
+                    jsonEntry = true;
+                }
+            }
+        }
+
+        var jsonColumnsToUpdate = new Dictionary<string, JsonPartialUpdateInfo>();
+        if (jsonEntry)
+        {
+            var processedEntries = new List<IUpdateEntry>();
+            foreach (var entry in _entries.Where(e => e.EntityType.IsMappedToJson()))
+            {
+                var modifiedMembers = entry.ToEntityEntry().Members.Where(m => m is not NavigationEntry && m.IsModified).ToList();
+                var jsonColumn = entry.EntityType.GetContainerColumnName()!;
+                var jsonPartialUpdateInfo = FindJsonPartialUpdateInfo2(entry, processedEntries);
+                processedEntries.Add(entry);
+
+                if (jsonPartialUpdateInfo == null)
+                {
+                    // this entry is a subtree of an entry that we already processed
+                    // so we already need to update the parent - no need to have extra entry for the subtree
+                    continue;
+                }
+
+                //if (modifiedMembers.Count == 1)
+                //{
+                //    jsonPartialUpdateInfo.Property = (IProperty)modifiedMembers.Single().Metadata;
+
+                //    var value = entry.GetCurrentProviderValue(jsonPartialUpdateInfo.Property);
+                //    jsonPartialUpdateInfo.PropertyValue = JsonValue.Create(value);
+                //    jsonPartialUpdateInfo.JsonPath.Add(jsonPartialUpdateInfo.Property.GetJsonPropertyName()!);
+                //}
+
+                if (jsonColumnsToUpdate.TryGetValue(jsonColumn, out var currentJsonPartialUpdateInfo))
+                {
+                    jsonPartialUpdateInfo = FindCommonJsonPartialUpdateInfo2(currentJsonPartialUpdateInfo, jsonPartialUpdateInfo);
+                    // compare with current
+                }
+
+                jsonColumnsToUpdate[jsonColumn] = jsonPartialUpdateInfo;
+            }
+
+            foreach (var (jsonColumnName, info) in jsonColumnsToUpdate)
+            {
+                var jsonColumnTypeMapping = info.Navigation.TargetEntityType.GetContainerColumnTypeMapping()!;
+                var navigationValue = info.ParentEntry.GetCurrentValue(info.Navigation);
+
+                var json = default(JsonNode?);
+                if (info.FinalOrdinal != null && navigationValue != null)
+                {
+                    int i = 0;
+                    foreach (var navigationValueElement in (IEnumerable)navigationValue)
+                    {
+                        if (i == info.FinalOrdinal)
+                        {
+                            json = CreateJson(
+                                navigationValueElement,
+                                info.ParentEntry,
+                                info.Navigation.TargetEntityType,
+                                ordinal: null,
+                                isCollection: false);
+
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    json = CreateJson(
+                        navigationValue,
+                        info.ParentEntry,
+                        info.Navigation.TargetEntityType,
+                        ordinal: null,
+                        isCollection: info.Navigation.IsCollection);
+                }
+
+                //var json = info.Property != null
+                //    ? (object?)info.PropertyValue
+                //    : CreateJson(
+                //        navigationValue,
+                //        info.ParentEntry,
+                //        info.Navigation.TargetEntityType,
+                //        ordinal: null,
+                //        isCollection: info.Navigation.IsCollection)?.ToJsonString();
+
+
+                var columnModificationParameters = info.JsonPath.Count > 0
+                    ? new ColumnModificationParameters(
+                        jsonColumnName,
+                        originalValue: null,
+                        value: json?.ToJsonString(),
+                        //value: info.JsonPath.Count > 0 ? json?.ToJsonString() : json,
+                        columnType: jsonColumnTypeMapping.StoreType,
+                        jsonColumnTypeMapping,
+                        jsonPath: string.Join(".", info.JsonPath),
+                        read: false,
+                        write: true,
+                        key: false,
+                        condition: false,
+                        _sensitiveLoggingEnabled)
+                        {
+                            GenerateParameterName = _generateParameterName,
+                        }
+                    : new ColumnModificationParameters(
+                        jsonColumnName,
+                        originalValue: null,
+                        value: json?.ToJsonString(),
+                        property: null,
+                        columnType: jsonColumnTypeMapping.StoreType,
+                        jsonColumnTypeMapping,
+                        read: false,
+                        write: true,
+                        key: false,
+                        condition: false,
+                        _sensitiveLoggingEnabled)
+                    {
+                        GenerateParameterName = _generateParameterName,
+                    };
+
+                columnModifications.Add(new ColumnModification(columnModificationParameters));
             }
         }
 
         var processedJsonNavigations = new List<INavigation>();
-        foreach (var entry in _entries)
+        foreach (var entry in _entries.Where(x => !x.EntityType.IsMappedToJson()))
         {
-            if (entry.EntityType.IsMappedToJson())
-            {
-                // for JSON entry, traverse to the entry for root JSON entity
-                // and build entire JSON structure based on it
-                // this will be the column modification command
-                var jsonColumnName = entry.EntityType.GetContainerColumnName()!;
-                var jsonColumnTypeMapping = entry.EntityType.GetContainerColumnTypeMapping()!;
-
-                var currentEntry = entry;
-                var currentOwnership = currentEntry.EntityType.FindOwnership()!;
-                while (currentEntry.EntityType.IsMappedToJson())
-                {
-                    currentOwnership = currentEntry.EntityType.FindOwnership()!;
-#pragma warning disable EF1001 // Internal EF Core API usage.
-                    currentEntry = ((InternalEntityEntry)currentEntry).StateManager.FindPrincipal((InternalEntityEntry)currentEntry, currentOwnership)!;
-#pragma warning restore EF1001 // Internal EF Core API usage.
-                }
-
-                var navigation = currentOwnership.GetNavigation(pointsToPrincipal: false)!;
-                if (processedJsonNavigations.Contains(navigation))
-                {
-                    continue;
-                }
-
-                processedJsonNavigations.Add(navigation);
-
-                // parent entity got deleted, no need to do any json-specific processing
-                if (currentEntry.EntityState == EntityState.Deleted)
-                {
-                    continue;
-                }
-
-                var navigationValue = currentEntry.GetCurrentValue(navigation)!;
-
-                var json = CreateJson(
-                    navigationValue,
-                    currentEntry,
-                    currentOwnership.DeclaringEntityType,
-                    ordinal: null,
-                    isCollection: navigation.IsCollection);
-
-                var columnModificationParameters = new ColumnModificationParameters(
-                    jsonColumnName,
-                    originalValue: null,
-                    value: json?.ToJsonString(),
-                    property: null,
-                    columnType: jsonColumnTypeMapping.StoreType,
-                    jsonColumnTypeMapping,
-                    read: false,
-                    write: true,
-                    key: false,
-                    condition: false,
-                    _sensitiveLoggingEnabled)
-                {
-                    GenerateParameterName = _generateParameterName,
-                };
-
-                columnModifications.Add(new ColumnModification(columnModificationParameters));
-
-                continue;
-            }
-
             var nonMainEntry = !_mainEntryAdded || entry != _entries[0];
 
             IEnumerable<IColumnMappingBase> columnMappings;
@@ -526,6 +639,111 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
         }
 
         return columnModifications;
+
+
+
+
+        static JsonPartialUpdateInfo? FindJsonPartialUpdateInfo2(IUpdateEntry entry, List<IUpdateEntry> processedEntries)
+        {
+            var result = default(JsonPartialUpdateInfo?);
+            var currentEntry = entry;
+            var currentOwnership = currentEntry.EntityType.FindOwnership()!;
+
+            while (currentEntry.EntityType.IsMappedToJson())
+            {
+                var jsonPropertyName = currentEntry.EntityType.GetJsonPropertyName()!;
+                currentOwnership = currentEntry.EntityType.FindOwnership()!;
+                var previousEntry = currentEntry;
+#pragma warning disable EF1001 // Internal EF Core API usage.
+                currentEntry = ((InternalEntityEntry)currentEntry).StateManager.FindPrincipal((InternalEntityEntry)currentEntry, currentOwnership)!;
+#pragma warning restore EF1001 // Internal EF Core API usage.
+
+                if (processedEntries.Contains(currentEntry))
+                {
+                    return null;
+                }
+
+                if (result == null)
+                {
+                    result = new JsonPartialUpdateInfo(
+                        currentEntry,
+                        currentOwnership.GetNavigation(pointsToPrincipal: false)!);
+
+                    if (!currentOwnership.IsUnique
+                        && previousEntry.EntityState != EntityState.Added
+                        && previousEntry.EntityState != EntityState.Deleted)
+                    {
+                        var ordinalProperty = previousEntry.EntityType.FindPrimaryKey()!.Properties.Last();
+                        result.FinalOrdinal = (int)previousEntry.GetCurrentProviderValue(ordinalProperty)! - 1;
+                    }
+                }
+
+                var jsonPathElement2 = currentOwnership.PrincipalEntityType.IsMappedToJson()
+                    ? jsonPropertyName
+                    : "";
+
+                // for collections we add ordinal key to the path, unless we are adding a new element to the collection
+                // when we add new element to the collection we need to re-create the entire collection
+                // to populate the ordinals correctly, so the path points to the collection itself,
+                // rather than particular element in the collection
+                if (!currentOwnership.IsUnique
+                    && previousEntry.EntityState != EntityState.Added
+                    && previousEntry.EntityState != EntityState.Deleted)
+                {
+                    var ordinalProperty = previousEntry.EntityType.FindPrimaryKey()!.Properties.Last();
+                    var ordinalKeyValue = (int)previousEntry.GetCurrentProviderValue(ordinalProperty)!;
+
+                    jsonPathElement2 += $"[{ordinalKeyValue - 1}]";
+                }
+
+                if (jsonPathElement2 != "")
+                {
+                    result.JsonPath.Insert(0, jsonPathElement2);
+                }
+            }
+
+            // when we are one, add a correct context symbol: $. when next element is navigation or a scalar
+            // and $ when we start with navigating into element in the root collection
+            if (result != null && result.JsonPath.Count > 0)
+            {
+                if (result.JsonPath[0].StartsWith("[", StringComparison.Ordinal))
+                {
+                    result.JsonPath[0] = "$" + result.JsonPath[0];
+                }
+                else
+                {
+                    result.JsonPath[0] = "$." + result.JsonPath[0];
+                }
+            }
+
+            return result;
+        }
+
+        static JsonPartialUpdateInfo FindCommonJsonPartialUpdateInfo2(JsonPartialUpdateInfo first, JsonPartialUpdateInfo second)
+        {
+            var resultPath = new List<string>();
+            var pathsMatch = first.JsonPath.Count == second.JsonPath.Count;
+            for (var i = 0; i < Math.Min(first.JsonPath.Count, second.JsonPath.Count); i++)
+            {
+                if (first.JsonPath[i] == second.JsonPath[i])
+                {
+                    resultPath.Add(first.JsonPath[i]);
+                }
+                else
+                {
+                    pathsMatch = false;
+                }
+            }
+
+            if (pathsMatch)
+            {
+                return first;
+            }
+
+            // TODO: return smaller one???
+
+            return first;
+        }
     }
 
     private JsonNode? CreateJson(object? navigationValue, IUpdateEntry parentEntry, IEntityType entityType, int? ordinal, bool isCollection)

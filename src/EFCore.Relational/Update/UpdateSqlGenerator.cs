@@ -317,13 +317,43 @@ public abstract class UpdateSqlGenerator : IUpdateSqlGenerator
                     var (g, n, s) = p;
                     g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
                     sb.Append(" = ");
-                    if (!o.UseCurrentValueParameter)
+
+                    if (o.JsonPath != null)
                     {
-                        AppendSqlLiteral(sb, o, n, s);
+                        sb.Append("JSON_MODIFY(");
+                        g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
+                        sb.Append(", ");
+
+                        // HACK, we need string literal here not json literal
+                        var blah = o.TypeMapping!.GenerateSqlLiteral(o.JsonPath);
+
+                        //sb.Append(o.TypeMapping!.GenerateSqlLiteral(o.JsonPath));
+                        sb.Append("'" + o.JsonPath + "'");
+                        sb.Append(", ");
+
+
+                        sb.Append("JSON_QUERY(");
+                        if (!o.UseCurrentValueParameter)
+                        {
+                            AppendSqlLiteral(sb, o, n, s);
+                        }
+                        else
+                        {
+                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                        }
+
+                        sb.Append("))");
                     }
                     else
                     {
-                        g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                        if (!o.UseCurrentValueParameter)
+                        {
+                            AppendSqlLiteral(sb, o, n, s);
+                        }
+                        else
+                        {
+                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                        }
                     }
                 });
     }
