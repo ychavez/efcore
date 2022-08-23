@@ -135,6 +135,82 @@ public class SqlServerUpdateSqlGenerator : UpdateAndSelectSqlGenerator, ISqlServ
         commandStringBuilder.AppendLine(SqlGenerationHelper.StatementTerminator);
     }
 
+    /// <inheritdoc />
+    protected override void AppendUpdateColumnValue(
+        ISqlGenerationHelper updateSqlGeneratorHelper,
+        IColumnModification columnModification,
+        StringBuilder stringBuilder,
+        string name,
+        string? schema)
+    {
+        if (columnModification.JsonPath != null)
+        {
+            stringBuilder.Append("JSON_MODIFY(");
+            updateSqlGeneratorHelper.DelimitIdentifier(stringBuilder, columnModification.ColumnName);
+            stringBuilder.Append(", 'strict ");
+            stringBuilder.Append(columnModification.JsonPath);
+            stringBuilder.Append("', JSON_QUERY(");
+            base.AppendUpdateColumnValue(updateSqlGeneratorHelper, columnModification, stringBuilder, name, schema);
+            stringBuilder.Append("))");
+        }
+        else
+        {
+            base.AppendUpdateColumnValue(updateSqlGeneratorHelper, columnModification, stringBuilder, name, schema);
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void AppendUpdateCommandHeader(
+        StringBuilder commandStringBuilder,
+        string name,
+        string? schema,
+        IReadOnlyList<IColumnModification> operations)
+    {
+        commandStringBuilder.Append("UPDATE ");
+        SqlGenerationHelper.DelimitIdentifier(commandStringBuilder, name, schema);
+        commandStringBuilder.Append(" SET ")
+            .AppendJoin(
+                operations,
+                (this, name, schema),
+                (sb, o, p) =>
+                {
+                    var (g, n, s) = p;
+                    g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
+                    sb.Append(" = ");
+
+                    // TODO: DRY - add a method in the relational that can generate all this 
+                    if (o.JsonPath != null)
+                    {
+                        sb.Append("JSON_MODIFY(");
+                        g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
+                        sb.Append(", 'strict ");
+                        sb.Append(o.JsonPath);
+                        sb.Append("', JSON_QUERY(");
+                        if (!o.UseCurrentValueParameter)
+                        {
+                            AppendSqlLiteral(sb, o, n, s);
+                        }
+                        else
+                        {
+                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                        }
+
+                        sb.Append("))");
+                    }
+                    else
+                    {
+                        if (!o.UseCurrentValueParameter)
+                        {
+                            AppendSqlLiteral(sb, o, n, s);
+                        }
+                        else
+                        {
+                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                        }
+                    }
+                });
+    }
+
     /// <summary>
     ///     This is an internal API that supports the Entity Framework Core infrastructure and not subject to
     ///     the same compatibility standards as public APIs. It may be changed or removed without notice in

@@ -318,44 +318,72 @@ public abstract class UpdateSqlGenerator : IUpdateSqlGenerator
                     g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
                     sb.Append(" = ");
 
-                    if (o.JsonPath != null)
-                    {
-                        sb.Append("JSON_MODIFY(");
-                        g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
-                        sb.Append(", ");
+                    AppendUpdateColumnValue(g.SqlGenerationHelper, o, sb, n, s);
 
-                        // HACK, we need string literal here not json literal
-                        var blah = o.TypeMapping!.GenerateSqlLiteral(o.JsonPath);
+                    //if (o.JsonPath != null)
+                    //{
+                    //    sb.Append("JSON_MODIFY(");
+                    //    g.SqlGenerationHelper.DelimitIdentifier(sb, o.ColumnName);
+                    //    sb.Append(", ");
 
-                        //sb.Append(o.TypeMapping!.GenerateSqlLiteral(o.JsonPath));
-                        sb.Append("'strict " + o.JsonPath + "'");
-                        sb.Append(", ");
+                    //    // HACK, we need string literal here not json literal
+                    //    var blah = o.TypeMapping!.GenerateSqlLiteral(o.JsonPath);
+
+                    //    //sb.Append(o.TypeMapping!.GenerateSqlLiteral(o.JsonPath));
+                    //    sb.Append("'strict " + o.JsonPath + "'");
+                    //    sb.Append(", ");
 
 
-                        sb.Append("JSON_QUERY(");
-                        if (!o.UseCurrentValueParameter)
-                        {
-                            AppendSqlLiteral(sb, o, n, s);
-                        }
-                        else
-                        {
-                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
-                        }
+                    //    sb.Append("JSON_QUERY(");
+                    //    if (!o.UseCurrentValueParameter)
+                    //    {
+                    //        AppendSqlLiteral(sb, o, n, s);
+                    //    }
+                    //    else
+                    //    {
+                    //        g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                    //    }
 
-                        sb.Append("))");
-                    }
-                    else
-                    {
-                        if (!o.UseCurrentValueParameter)
-                        {
-                            AppendSqlLiteral(sb, o, n, s);
-                        }
-                        else
-                        {
-                            g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
-                        }
-                    }
+                    //    sb.Append("))");
+                    //}
+                    //else
+                    //{
+                    //    if (!o.UseCurrentValueParameter)
+                    //    {
+                    //        AppendSqlLiteral(sb, o, n, s);
+                    //    }
+                    //    else
+                    //    {
+                    //        g.SqlGenerationHelper.GenerateParameterNamePlaceholder(sb, o.ParameterName);
+                    //    }
+                    //}
                 });
+    }
+
+    /// <summary>
+    ///     Appends a SQL fragment representing the value that is assigned to a column which is being updated.
+    /// </summary>
+    /// <param name="updateSqlGeneratorHelper">The update sql generator helper.</param>
+    /// <param name="columnModification">The operation representing the data to be updated.</param>
+    /// <param name="stringBuilder">The builder to which the SQL should be appended.</param>
+    /// <param name="name">The name of the table.</param>
+    /// <param name="schema">The table schema, or <see langword="null" /> to use the default schema.</param>
+    protected virtual void AppendUpdateColumnValue(
+        ISqlGenerationHelper updateSqlGeneratorHelper,
+        IColumnModification columnModification,
+        StringBuilder stringBuilder,
+        string name,
+        string? schema)
+    {
+        if (!columnModification.UseCurrentValueParameter)
+        {
+            AppendSqlLiteral(stringBuilder, columnModification, name, schema);
+        }
+        else
+        {
+            updateSqlGeneratorHelper.GenerateParameterNamePlaceholder(
+                stringBuilder, columnModification.ParameterName);
+        }
     }
 
     /// <inheritdoc />

@@ -423,22 +423,11 @@ public class ModificationCommand : IModificationCommand, INonTrackedModification
                         isCollection: info.Navigation.IsCollection);
                 }
 
-                //var json = info.Property != null
-                //    ? (object?)info.PropertyValue
-                //    : CreateJson(
-                //        navigationValue,
-                //        info.ParentEntry,
-                //        info.Navigation.TargetEntityType,
-                //        ordinal: null,
-                //        isCollection: info.Navigation.IsCollection)?.ToJsonString();
-
-
                 var columnModificationParameters = info.JsonPath.Count > 0
                     ? new ColumnModificationParameters(
                         jsonColumnName,
                         originalValue: null,
                         value: json?.ToJsonString(),
-                        //value: info.JsonPath.Count > 0 ? json?.ToJsonString() : json,
                         columnType: jsonColumnTypeMapping.StoreType,
                         jsonColumnTypeMapping,
                         jsonPath: string.Join(".", info.JsonPath),
