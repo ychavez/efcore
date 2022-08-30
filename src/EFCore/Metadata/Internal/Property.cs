@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Internal;
 
 namespace Microsoft.EntityFrameworkCore.Metadata.Internal;
@@ -947,7 +948,7 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
         checkedProperties.Add(this);
         return principal.GetProviderValueComparer(checkedProperties);
     }
-    
+
     /// <summary>
     ///     This is an internal API that supports the Entity Framework Core infrastructure and not subject to
     ///     the same compatibility standards as public APIs. It may be changed or removed without notice in
@@ -970,7 +971,7 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
         var newEqualsParam2 = Expression.Parameter(ClrType, "v2");
         var newHashCodeParam = Expression.Parameter(ClrType, "v");
         var newSnapshotParam = Expression.Parameter(ClrType, "v");
-        var hasValueMethod = ClrType.GetMethod("get_HasValue")!;
+        var hasValueProperty = ClrType.GetProperty("HasValue")!;
         var v1HasValue = Expression.Parameter(typeof(bool), "v1HasValue");
         var v2HasValue = Expression.Parameter(typeof(bool), "v2HasValue");
 
@@ -980,8 +981,8 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
                 Expression.Block(
                     typeof(bool),
                     new[] { v1HasValue, v2HasValue },
-                    Expression.Assign(v1HasValue, Expression.Call(newEqualsParam1, hasValueMethod)),
-                    Expression.Assign(v2HasValue, Expression.Call(newEqualsParam2, hasValueMethod)),
+                    Expression.Assign(v1HasValue, Expression.MakeMemberAccess(newEqualsParam1, hasValueProperty)),
+                    Expression.Assign(v2HasValue, Expression.MakeMemberAccess(newEqualsParam2, hasValueProperty)),
                     Expression.OrElse(
                         Expression.AndAlso(
                             v1HasValue,
@@ -996,28 +997,28 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
                 newEqualsParam1, newEqualsParam2),
             Expression.Lambda(
                 Expression.Condition(
-                    Expression.Call(newHashCodeParam, hasValueMethod),
+                    Expression.MakeMemberAccess(newHashCodeParam, hasValueProperty),
                     valueComparer.ExtractHashCodeBody(
                         Expression.Convert(newHashCodeParam, valueComparer.Type)),
                     Expression.Constant(0, typeof(int))),
                 newHashCodeParam),
             Expression.Lambda(
                 Expression.Condition(
-                    Expression.Call(newSnapshotParam, hasValueMethod),
+                    Expression.MakeMemberAccess(newSnapshotParam, hasValueProperty),
                     Expression.Convert(
                         valueComparer.ExtractSnapshotBody(
                             Expression.Convert(newSnapshotParam, valueComparer.Type)), ClrType),
                     Expression.Default(ClrType)),
                 newSnapshotParam))!;
     }
-    
+
     private IProperty? FindFirstDifferentPrincipal()
     {
         var principal = ((IProperty)this).FindFirstPrincipal();
 
         return principal != this ? principal : null;
     }
-    
+
     /// <summary>
     ///     This is an internal API that supports the Entity Framework Core infrastructure and not subject to
     ///     the same compatibility standards as public APIs. It may be changed or removed without notice in

@@ -15,6 +15,7 @@ using Microsoft.EntityFrameworkCore.SqlServer.Design.Internal;
 using Microsoft.EntityFrameworkCore.SqlServer.Metadata.Internal;
 using Microsoft.EntityFrameworkCore.TestModels.AspNetIdentity;
 using Microsoft.EntityFrameworkCore.ValueGeneration.Internal;
+using Microsoft.Extensions.Options;
 using NetTopologySuite;
 using NetTopologySuite.Geometries;
 using Newtonsoft.Json.Linq;
@@ -2917,7 +2918,24 @@ namespace TestNamespace
                         },
                         model.GetEntityTypes());
                 },
-                typeof(SqlServerNetTopologySuiteDesignTimeServices));
+                typeof(SqlServerNetTopologySuiteDesignTimeServices),
+                c =>
+                {
+                    c.Database.EnsureCreatedResiliently();
+
+                    c.Database.BeginTransaction();
+
+                    c.Set<PrincipalDerived<DependentBase<byte?>>>().Add(new PrincipalDerived<DependentBase<byte?>>
+                    {
+                        Id = 1,
+                        Dependent = new DependentBase<byte?>
+                        {
+                            Id = 1
+                        }
+                    });
+
+                    c.SaveChanges();
+                });
 
         public class TpcContext : SqlServerContextBase
         {
@@ -4752,6 +4770,7 @@ namespace TestNamespace
             Action<IReadOnlyCollection<ScaffoldedFile>> assertScaffold = null,
             Action<IModel> assertModel = null,
             Type additionalDesignTimeServices = null,
+            Action<DbContext> useContext = null,
             string expectedExceptionMessage = null)
         {
             var model = context.GetService<IDesignTimeModel>().Model;
@@ -4805,19 +4824,26 @@ namespace TestNamespace
 
             var assembly = build.BuildInMemory();
 
-            if (assertModel != null)
-            {
-                var modelType = assembly.GetType(options.ModelNamespace + "." + options.ContextType.Name + "Model");
-                var instancePropertyInfo = modelType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static);
-                var compiledModel = (IModel)instancePropertyInfo.GetValue(null);
+            var modelType = assembly.GetType(options.ModelNamespace + "." + options.ContextType.Name + "Model");
+            var instancePropertyInfo = modelType.GetProperty("Instance", BindingFlags.Public | BindingFlags.Static);
+            var compiledModel = (IModel)instancePropertyInfo.GetValue(null);
 
-                var modelRuntimeInitializer = context.GetService<IModelRuntimeInitializer>();
-                assertModel(modelRuntimeInitializer.Initialize(compiledModel, designTime: false));
-            }
+            var modelRuntimeInitializer = context.GetService<IModelRuntimeInitializer>();
+            compiledModel = modelRuntimeInitializer.Initialize(compiledModel, designTime: false);
+            assertModel(compiledModel);
 
             if (assertScaffold != null)
             {
                 assertScaffold(scaffoldedFiles);
+            }
+
+            if (useContext != null)
+            {
+                var testStore = SqlServerTestStore.GetOrCreate("RuntimeModelTest" + context.GetType().Name);
+                var newContext = new DbContext(
+                    testStore.AddProviderOptions(new DbContextOptionsBuilder().UseModel(compiledModel))
+                    .Options);
+                useContext(newContext);
             }
         }
 
