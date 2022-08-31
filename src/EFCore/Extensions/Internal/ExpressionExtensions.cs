@@ -35,10 +35,10 @@ public static class ExpressionExtensions
             && currentValueExpression.Type.GetGenericTypeDefinition() == typeof(Nullable<>))
         {
             return Expression.Not(
-                Expression.Call(
+                Expression.MakeMemberAccess(
                     currentValueExpression,
                     Check.NotNull(
-                        currentValueExpression.Type.GetMethod("get_HasValue"), $"get_HasValue on {currentValueExpression.Type.Name}")));
+                        currentValueExpression.Type.GetProperty("HasValue"), $"HasValue on {currentValueExpression.Type.Name}")));
         }
 
         var property = propertyBase as IReadOnlyProperty;

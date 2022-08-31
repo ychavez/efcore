@@ -197,6 +197,18 @@ public class IndentedStringBuilder
     }
 
     /// <summary>
+    ///     Increments the indent.
+    /// </summary>
+    /// <param name="indent">The indent to add.</param>
+    /// <returns>This builder so that additional calls can be chained.</returns>
+    public virtual IndentedStringBuilder IncrementIndent(int indent)
+    {
+        _indent += indent;
+
+        return this;
+    }
+
+    /// <summary>
     ///     Decrements the indent.
     /// </summary>
     /// <returns>This builder so that additional calls can be chained.</returns>
@@ -205,6 +217,22 @@ public class IndentedStringBuilder
         if (_indent > 0)
         {
             _indent--;
+        }
+
+        return this;
+    }
+
+    /// <summary>
+    ///     Decrements the indent.
+    /// </summary>
+    /// <param name="indent">The indent to remove.</param>
+    /// <returns>This builder so that additional calls can be chained.</returns>
+    public virtual IndentedStringBuilder DecrementIndent(int indent)
+    {
+        _indent -= indent;
+        if (_indent < 0)
+        {
+            _indent = 0;
         }
 
         return this;

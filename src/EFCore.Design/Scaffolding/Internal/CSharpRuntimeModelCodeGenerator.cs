@@ -1,10 +1,16 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Xml.Linq;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Design.Internal;
 using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using Microsoft.VisualBasic;
 
 namespace Microsoft.EntityFrameworkCore.Scaffolding.Internal;
 
@@ -709,10 +715,41 @@ public class CSharpRuntimeModelCodeGenerator : ICompiledModelCodeGenerator
                     property.DeclaringEntityType.ShortName(), property.Name, "Customize()", parameters.ClassName));
         }
 
+        var mainBuilder = parameters.MainBuilder;
+        string? valueComparerString = null;
+        if (valueComparerType == null)
+        {
+            var valueComparer = property.GetValueComparer();
+            valueComparerType = valueComparer.GetType();
+            if (valueComparerType.IsGenericType
+                && valueComparerType.GetGenericTypeDefinition() == typeof(ValueComparer<>))
+            {
+                AddNamespace(valueComparerType, parameters.Namespaces);
+
+                var expressionVariables = new HashSet<string>();
+
+                valueComparerString = $"new {_code.Reference(valueComparerType)}"
+                    + $"({CreateExpression(valueComparer.EqualsExpression, mainBuilder.IndentCount, expressionVariables, parameters.Namespaces)}, "
+                    + $"{CreateExpression(valueComparer.HashCodeExpression, mainBuilder.IndentCount, expressionVariables, parameters.Namespaces)}, "
+                    + $"{CreateExpression(valueComparer.SnapshotExpression, mainBuilder.IndentCount, expressionVariables, parameters.Namespaces)})";
+
+                if (expressionVariables.Count > 0)
+                {
+                    var variableBuilder = new IndentedStringBuilder();
+                    variableBuilder.IncrementIndent(mainBuilder.IndentCount);
+                    // TODO: print out the expression variables
+                }
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected comparer {valueComparerType.DisplayName()} for {property.DeclaringEntityType.DisplayName()}.{property.Name}");
+            }
+        }
+
         var variableName = _code.Identifier(property.Name, parameters.ScopeVariables, capitalize: false);
         propertyVariables[property] = variableName;
 
-        var mainBuilder = parameters.MainBuilder;
         mainBuilder
             .Append("var ").Append(variableName).Append(" = ").Append(parameters.TargetName).AppendLine(".AddProperty(")
             .IncrementIndent()
@@ -813,7 +850,29 @@ public class CSharpRuntimeModelCodeGenerator : ICompiledModelCodeGenerator
                 .Append("()");
         }
 
-        if (valueComparerType != null)
+        if (valueComparerString != null)
+        {
+            var valueComparer = property.GetValueComparer();
+            valueComparerType = valueComparer.GetType();
+            if (valueComparerType.IsGenericType
+                && valueComparerType.GetGenericTypeDefinition() == typeof(ValueComparer<>))
+            {
+                AddNamespace(valueComparerType, parameters.Namespaces);
+                var equalsBuilder = new IndentedStringBuilder();
+                equalsBuilder.IncrementIndent(mainBuilder.IndentCount);
+
+                mainBuilder.AppendLine(",")
+                    .Append("valueComparer: ")
+                    .Append(valueComparerString);
+                //TODO: also set keyValueComparer
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected comparer {valueComparerType.DisplayName()} for {property.DeclaringEntityType.DisplayName()}.{property.Name}");
+            }
+        }
+        else if(valueComparerType != null)
         {
             AddNamespace(valueComparerType, parameters.Namespaces);
 
@@ -1424,5 +1483,1054 @@ public class CSharpRuntimeModelCodeGenerator : ICompiledModelCodeGenerator
         {
             AddNamespace(sequenceType, namespaces);
         }
+    }
+
+    private string CreateExpression(Expression? expression, int indent, ISet<string> expressionVariables, ISet<string> namespaces)
+    {
+        var mainBuilder = new IndentedStringBuilder();
+        mainBuilder.IncrementIndent(indent);
+        new ExpressionTreePrinter(mainBuilder, expressionVariables, namespaces).Visit(expression);
+        return mainBuilder.ToString();
+    }
+
+    // TODO: make this print out an expression tree
+    private class ExpressionTreePrinter : ExpressionVisitor
+    {
+        private static readonly List<string> SimpleMethods = new()
+        {
+            "get_Item",
+            "TryReadValue",
+            "ReferenceEquals"
+        };
+
+        private readonly IndentedStringBuilder _mainBuilder;
+        private readonly Dictionary<ParameterExpression, string?> _parametersInScope;
+        private readonly List<ParameterExpression> _namelessParameters;
+        private readonly List<ParameterExpression> _encounteredParameters;
+        private readonly ISet<string> _expressionVariables;
+        private readonly ISet<string> _namespaces;
+
+
+        /// <summary>
+        ///     Creates a new instance of the <see cref="ExpressionTreePrinter" /> class.
+        /// </summary>
+        public ExpressionTreePrinter(
+            IndentedStringBuilder mainBuilder,
+            ISet<string> expressionVariables,
+            ISet<string> namespaces)
+        {
+            _mainBuilder = mainBuilder;
+            _expressionVariables = expressionVariables;
+            _namespaces = namespaces;
+            _parametersInScope = new Dictionary<ParameterExpression, string?>();
+            _namelessParameters = new List<ParameterExpression>();
+            _encounteredParameters = new List<ParameterExpression>();
+        }
+
+        private int? CharacterLimit { get; set; }
+        private bool Verbose { get; set; }
+
+        /// <summary>
+        ///     Visit given readonly collection of expression for printing.
+        /// </summary>
+        /// <param name="items">A collection of items to print.</param>
+        /// <param name="joinAction">A join action to use when joining printout of individual item in the collection.</param>
+        public virtual void VisitCollection<T>(
+            IReadOnlyCollection<T> items,
+            Action<ExpressionTreePrinter>? joinAction = null)
+            where T : Expression
+        {
+            joinAction ??= (p => p.Append(", "));
+
+            var first = true;
+            foreach (var item in items)
+            {
+                if (!first)
+                {
+                    joinAction(this);
+                }
+                else
+                {
+                    first = false;
+                }
+
+                Visit(item);
+            }
+        }
+
+        /// <summary>
+        ///     Appends a new line to current output being built.
+        /// </summary>
+        /// <returns>This printer so additional calls can be chained.</returns>
+        public virtual ExpressionTreePrinter AppendLine()
+        {
+            _mainBuilder.AppendLine();
+            return this;
+        }
+
+        /// <summary>
+        ///     Appends the given string and a new line to current output being built.
+        /// </summary>
+        /// <param name="value">The string to append.</param>
+        /// <returns>This printer so additional calls can be chained.</returns>
+        public virtual ExpressionVisitor AppendLine(string value)
+        {
+            _mainBuilder.AppendLine(value);
+            return this;
+        }
+
+        /// <summary>
+        ///     Appends all the lines to current output being built.
+        /// </summary>
+        /// <param name="value">The string to append.</param>
+        /// <param name="skipFinalNewline">If true, then a terminating new line is not added.</param>
+        /// <returns>This printer so additional calls can be chained.</returns>
+        public virtual ExpressionTreePrinter AppendLines(string value, bool skipFinalNewline = false)
+        {
+            _mainBuilder.AppendLines(value, skipFinalNewline);
+            return this;
+        }
+
+        /// <summary>
+        ///     Creates a scoped indenter that will increment the indent, then decrement it when disposed.
+        /// </summary>
+        /// <returns>An indenter.</returns>
+        public virtual IDisposable Indent()
+            => _mainBuilder.Indent();
+
+        /// <summary>
+        ///     Appends the given string to current output being built.
+        /// </summary>
+        /// <param name="value">The string to append.</param>
+        /// <returns>This printer so additional calls can be chained.</returns>
+        public virtual ExpressionTreePrinter Append(string value)
+        {
+            _mainBuilder.Append(value);
+            return this;
+        }
+
+        /// <summary>
+        ///     Creates a printable string representation of the given expression.
+        /// </summary>
+        /// <param name="expression">The expression to print.</param>
+        /// <param name="characterLimit">An optional limit to the number of characters included. Additional output will be truncated.</param>
+        /// <returns>The printable representation.</returns>
+        public virtual string Print(
+            Expression expression,
+            int? characterLimit = null)
+            => PrintCore(expression, characterLimit, verbose: false);
+
+        /// <summary>
+        ///     Creates a printable verbose string representation of the given expression.
+        /// </summary>
+        /// <param name="expression">The expression to print.</param>
+        /// <returns>The printable representation.</returns>
+        public virtual string PrintDebug(
+            Expression expression)
+            => PrintCore(expression, characterLimit: null, verbose: true);
+
+        private string PrintCore(
+            Expression expression,
+            int? characterLimit,
+            bool verbose)
+        {
+            _mainBuilder.Clear();
+            _parametersInScope.Clear();
+            _namelessParameters.Clear();
+            _encounteredParameters.Clear();
+
+            CharacterLimit = characterLimit;
+            Verbose = verbose;
+
+            Visit(expression);
+
+            var queryPlan = PostProcess(_mainBuilder.ToString());
+
+            if (characterLimit != null
+                && characterLimit.Value > 0)
+            {
+                queryPlan = queryPlan.Length > characterLimit
+                    ? queryPlan[..characterLimit.Value] + "..."
+                    : queryPlan;
+            }
+
+            return queryPlan;
+        }
+
+        /// <summary>
+        ///     Returns binary operator string corresponding to given <see cref="ExpressionType" />.
+        /// </summary>
+        /// <param name="expressionType">The expression type to generate binary operator for.</param>
+        /// <returns>The binary operator string.</returns>
+        public virtual string GenerateBinaryOperator(ExpressionType expressionType)
+            => _binaryOperandMap[expressionType];
+
+        /// <inheritdoc />
+        [return: NotNullIfNotNull("expression")]
+        public override Expression? Visit(Expression? expression)
+        {
+            if (expression == null)
+            {
+                return null;
+            }
+
+            if (CharacterLimit != null
+                && _mainBuilder.Length > CharacterLimit.Value)
+            {
+                return expression;
+            }
+
+            switch (expression.NodeType)
+            {
+                case ExpressionType.AndAlso:
+                case ExpressionType.ArrayIndex:
+                case ExpressionType.Assign:
+                case ExpressionType.Equal:
+                case ExpressionType.GreaterThan:
+                case ExpressionType.GreaterThanOrEqual:
+                case ExpressionType.LessThan:
+                case ExpressionType.LessThanOrEqual:
+                case ExpressionType.NotEqual:
+                case ExpressionType.OrElse:
+                case ExpressionType.Coalesce:
+                case ExpressionType.Add:
+                case ExpressionType.Subtract:
+                case ExpressionType.Multiply:
+                case ExpressionType.Divide:
+                case ExpressionType.Modulo:
+                case ExpressionType.And:
+                case ExpressionType.Or:
+                case ExpressionType.ExclusiveOr:
+                    VisitBinary((BinaryExpression)expression);
+                    break;
+
+                case ExpressionType.Block:
+                    VisitBlock((BlockExpression)expression);
+                    break;
+
+                case ExpressionType.Conditional:
+                    VisitConditional((ConditionalExpression)expression);
+                    break;
+
+                case ExpressionType.Constant:
+                    VisitConstant((ConstantExpression)expression);
+                    break;
+
+                case ExpressionType.Lambda:
+                    base.Visit(expression);
+                    break;
+
+                case ExpressionType.Goto:
+                    VisitGoto((GotoExpression)expression);
+                    break;
+
+                case ExpressionType.Label:
+                    VisitLabel((LabelExpression)expression);
+                    break;
+
+                case ExpressionType.MemberAccess:
+                    VisitMember((MemberExpression)expression);
+                    break;
+
+                case ExpressionType.MemberInit:
+                    VisitMemberInit((MemberInitExpression)expression);
+                    break;
+
+                case ExpressionType.Call:
+                    VisitMethodCall((MethodCallExpression)expression);
+                    break;
+
+                case ExpressionType.New:
+                    VisitNew((NewExpression)expression);
+                    break;
+
+                case ExpressionType.NewArrayInit:
+                    VisitNewArray((NewArrayExpression)expression);
+                    break;
+
+                case ExpressionType.Parameter:
+                    VisitParameter((ParameterExpression)expression);
+                    break;
+
+                case ExpressionType.Convert:
+                case ExpressionType.Throw:
+                case ExpressionType.Not:
+                case ExpressionType.TypeAs:
+                case ExpressionType.Quote:
+                    VisitUnary((UnaryExpression)expression);
+                    break;
+
+                case ExpressionType.Default:
+                    VisitDefault((DefaultExpression)expression);
+                    break;
+
+                case ExpressionType.Try:
+                    VisitTry((TryExpression)expression);
+                    break;
+
+                case ExpressionType.Index:
+                    VisitIndex((IndexExpression)expression);
+                    break;
+
+                case ExpressionType.TypeIs:
+                    VisitTypeBinary((TypeBinaryExpression)expression);
+                    break;
+
+                case ExpressionType.Switch:
+                    VisitSwitch((SwitchExpression)expression);
+                    break;
+
+                case ExpressionType.Invoke:
+                    VisitInvocation((InvocationExpression)expression);
+                    break;
+
+                case ExpressionType.Extension:
+                    VisitExtension(expression);
+                    break;
+
+                default:
+                    UnhandledExpressionType(expression);
+                    break;
+            }
+
+            return expression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitBinary(BinaryExpression binaryExpression)
+        {
+            Visit(binaryExpression.Left);
+
+            if (binaryExpression.NodeType == ExpressionType.ArrayIndex)
+            {
+                _mainBuilder.Append("[");
+
+                Visit(binaryExpression.Right);
+
+                _mainBuilder.Append("]");
+            }
+            else
+            {
+                if (!_binaryOperandMap.TryGetValue(binaryExpression.NodeType, out var operand))
+                {
+                    UnhandledExpressionType(binaryExpression);
+                }
+                else
+                {
+                    _mainBuilder.Append(operand);
+                }
+
+                Visit(binaryExpression.Right);
+            }
+
+            return binaryExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitBlock(BlockExpression blockExpression)
+        {
+            AppendLine();
+            AppendLine("{");
+
+            using (_mainBuilder.Indent())
+            {
+                foreach (var variable in blockExpression.Variables)
+                {
+                    if (!_parametersInScope.ContainsKey(variable))
+                    {
+                        _parametersInScope.Add(variable, variable.Name);
+                        Append(variable.Type.ShortDisplayName());
+                        Append(" ");
+                        VisitParameter(variable);
+                        AppendLine(";");
+                    }
+                }
+
+                var expressions = blockExpression.Result != null
+                    ? blockExpression.Expressions.Except(new[] { blockExpression.Result })
+                    : blockExpression.Expressions;
+
+                foreach (var expression in expressions)
+                {
+                    Visit(expression);
+                    AppendLine(";");
+                }
+
+                if (blockExpression.Result != null)
+                {
+                    if (blockExpression.Result.Type != typeof(void))
+                    {
+                        Append("return ");
+                    }
+
+                    Visit(blockExpression.Result);
+                    AppendLine(";");
+                }
+            }
+
+            Append("}");
+
+            return blockExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitConditional(ConditionalExpression conditionalExpression)
+        {
+            Visit(conditionalExpression.Test);
+
+            _mainBuilder.Append(" ? ");
+
+            Visit(conditionalExpression.IfTrue);
+
+            _mainBuilder.Append(" : ");
+
+            Visit(conditionalExpression.IfFalse);
+
+            return conditionalExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitConstant(ConstantExpression constantExpression)
+        {
+            if (constantExpression.Value is IPrintableExpression printable)
+            {
+                printable.Print(this);
+            }
+            else
+            {
+                Print(constantExpression.Value);
+            }
+
+            return constantExpression;
+        }
+
+        private void Print(object? value)
+        {
+            if (value is IEnumerable enumerable
+                && !(value is string))
+            {
+                _mainBuilder.Append(value.GetType().ShortDisplayName() + " { ");
+
+                var first = true;
+                foreach (var item in enumerable)
+                {
+                    if (first)
+                    {
+                        first = false;
+                    }
+                    else
+                    {
+                        _mainBuilder.Append(", ");
+                    }
+
+                    Print(item);
+                }
+
+                _mainBuilder.Append(" }");
+                return;
+            }
+
+            var stringValue = value == null
+                ? "null"
+                : value.ToString() != value.GetType().ToString()
+                    ? value.ToString()
+                    : value.GetType().ShortDisplayName();
+
+            if (value is string)
+            {
+                stringValue = $@"""{stringValue}""";
+            }
+
+            _mainBuilder.Append(stringValue ?? "Unknown");
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitGoto(GotoExpression gotoExpression)
+        {
+            AppendLine("return (" + gotoExpression.Target.Type.ShortDisplayName() + ")" + gotoExpression.Target + " {");
+            using (_mainBuilder.Indent())
+            {
+                Visit(gotoExpression.Value);
+            }
+
+            _mainBuilder.Append("}");
+
+            return gotoExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitLabel(LabelExpression labelExpression)
+        {
+            _mainBuilder.Append(labelExpression.Target.ToString());
+
+            return labelExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitLambda<T>(Expression<T> lambdaExpression)
+        {
+            if (lambdaExpression.Parameters.Count != 1)
+            {
+                _mainBuilder.Append("(");
+            }
+
+            foreach (var parameter in lambdaExpression.Parameters)
+            {
+                var parameterName = parameter.Name;
+
+                if (!_parametersInScope.ContainsKey(parameter))
+                {
+                    _parametersInScope.Add(parameter, parameterName);
+                }
+
+                Visit(parameter);
+
+                if (parameter != lambdaExpression.Parameters.Last())
+                {
+                    _mainBuilder.Append(", ");
+                }
+            }
+
+            if (lambdaExpression.Parameters.Count != 1)
+            {
+                _mainBuilder.Append(")");
+            }
+
+            _mainBuilder.Append(" => ");
+
+            Visit(lambdaExpression.Body);
+
+            foreach (var parameter in lambdaExpression.Parameters)
+            {
+                // however we don't remove nameless parameters so that they are unique globally, not just within the scope
+                _parametersInScope.Remove(parameter);
+            }
+
+            return lambdaExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitMember(MemberExpression memberExpression)
+        {
+            if (memberExpression.Expression != null)
+            {
+                if (memberExpression.Expression.NodeType == ExpressionType.Convert
+                    || memberExpression.Expression is BinaryExpression)
+                {
+                    _mainBuilder.Append("(");
+                    Visit(memberExpression.Expression);
+                    _mainBuilder.Append(")");
+                }
+                else
+                {
+                    Visit(memberExpression.Expression);
+                }
+            }
+            else
+            {
+                // ReSharper disable once PossibleNullReferenceException
+                _mainBuilder.Append(memberExpression.Member.DeclaringType?.Name ?? "MethodWithoutDeclaringType");
+            }
+
+            _mainBuilder.Append("." + memberExpression.Member.Name);
+
+            return memberExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitMemberInit(MemberInitExpression memberInitExpression)
+        {
+            _mainBuilder.Append("new " + memberInitExpression.Type.ShortDisplayName());
+
+            var appendAction = memberInitExpression.Bindings.Count > 1 ? (Func<string, ExpressionVisitor>)AppendLine : Append;
+            appendAction("{ ");
+            using (_mainBuilder.Indent())
+            {
+                for (var i = 0; i < memberInitExpression.Bindings.Count; i++)
+                {
+                    var binding = memberInitExpression.Bindings[i];
+                    if (binding is MemberAssignment assignment)
+                    {
+                        _mainBuilder.Append(assignment.Member.Name + " = ");
+                        Visit(assignment.Expression);
+                        appendAction(i == memberInitExpression.Bindings.Count - 1 ? " " : ", ");
+                    }
+                    else
+                    {
+                        AppendLine(CoreStrings.UnhandledMemberBinding(binding.BindingType));
+                    }
+                }
+            }
+
+            AppendLine("}");
+
+            return memberInitExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitMethodCall(MethodCallExpression methodCallExpression)
+        {
+            if (methodCallExpression.Object != null)
+            {
+                switch (methodCallExpression.Object)
+                {
+                    case BinaryExpression:
+                    case UnaryExpression:
+                        _mainBuilder.Append("(");
+                        Visit(methodCallExpression.Object);
+                        _mainBuilder.Append(")");
+                        break;
+                    default:
+                        Visit(methodCallExpression.Object);
+                        break;
+                }
+
+                _mainBuilder.Append(".");
+            }
+
+            var methodArguments = methodCallExpression.Arguments.ToList();
+            var method = methodCallExpression.Method;
+
+            var extensionMethod = !Verbose
+                && methodCallExpression.Arguments.Count > 0
+                && method.IsDefined(typeof(ExtensionAttribute), inherit: false);
+
+            if (extensionMethod)
+            {
+                Visit(methodArguments[0]);
+                _mainBuilder.IncrementIndent();
+                _mainBuilder.AppendLine();
+                _mainBuilder.Append($".{method.Name}");
+                methodArguments = methodArguments.Skip(1).ToList();
+                if (method.Name == nameof(Enumerable.Cast)
+                    || method.Name == nameof(Enumerable.OfType))
+                {
+                    PrintGenericArguments(method, _mainBuilder);
+                }
+            }
+            else
+            {
+                if (method.IsStatic)
+                {
+                    _mainBuilder.Append(method.DeclaringType!.ShortDisplayName()).Append(".");
+                }
+
+                _mainBuilder.Append(method.Name);
+                PrintGenericArguments(method, _mainBuilder);
+            }
+
+            _mainBuilder.Append("(");
+
+            var isSimpleMethodOrProperty = SimpleMethods.Contains(method.Name)
+                || methodArguments.Count < 2
+                || method.IsEFPropertyMethod();
+
+            var appendAction = isSimpleMethodOrProperty ? (Func<string, ExpressionVisitor>)Append : AppendLine;
+
+            if (methodArguments.Count > 0)
+            {
+                appendAction("");
+
+                var argumentNames
+                    = !isSimpleMethodOrProperty
+                        ? extensionMethod
+                            ? method.GetParameters().Skip(1).Select(p => p.Name).ToList()
+                            : method.GetParameters().Select(p => p.Name).ToList()
+                        : new List<string?>();
+
+                IDisposable? indent = null;
+
+                if (!isSimpleMethodOrProperty)
+                {
+                    indent = _mainBuilder.Indent();
+                }
+
+                for (var i = 0; i < methodArguments.Count; i++)
+                {
+                    var argument = methodArguments[i];
+
+                    if (!isSimpleMethodOrProperty)
+                    {
+                        _mainBuilder.Append(argumentNames[i] + ": ");
+                    }
+
+                    Visit(argument);
+
+                    if (i < methodArguments.Count - 1)
+                    {
+                        appendAction(", ");
+                    }
+                }
+
+                if (!isSimpleMethodOrProperty)
+                {
+                    indent?.Dispose();
+                }
+            }
+
+            Append(")");
+
+            if (extensionMethod)
+            {
+                _mainBuilder.DecrementIndent();
+            }
+
+            return methodCallExpression;
+
+            static void PrintGenericArguments(MethodInfo method, IndentedStringBuilder stringBuilder)
+            {
+                if (method.IsGenericMethod)
+                {
+                    stringBuilder.Append("<");
+                    var first = true;
+                    foreach (var genericArgument in method.GetGenericArguments())
+                    {
+                        if (!first)
+                        {
+                            stringBuilder.Append(", ");
+                        }
+
+                        stringBuilder.Append(genericArgument.ShortDisplayName());
+                        first = false;
+                    }
+
+                    stringBuilder.Append(">");
+                }
+            }
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitNew(NewExpression newExpression)
+        {
+            _mainBuilder.Append("new ");
+
+            var isComplex = newExpression.Arguments.Count > 1;
+            var appendAction = isComplex ? (Func<string, ExpressionVisitor>)AppendLine : Append;
+
+            var isAnonymousType = newExpression.Type.IsAnonymousType();
+            if (!isAnonymousType)
+            {
+                _mainBuilder.Append(newExpression.Type.ShortDisplayName());
+                appendAction("(");
+            }
+            else
+            {
+                appendAction("{ ");
+            }
+
+            IDisposable? indent = null;
+            if (isComplex)
+            {
+                indent = _mainBuilder.Indent();
+            }
+
+            for (var i = 0; i < newExpression.Arguments.Count; i++)
+            {
+                if (newExpression.Members != null)
+                {
+                    Append(newExpression.Members[i].Name + " = ");
+                }
+
+                Visit(newExpression.Arguments[i]);
+                appendAction(i == newExpression.Arguments.Count - 1 ? "" : ", ");
+            }
+
+            if (isComplex)
+            {
+                indent?.Dispose();
+            }
+
+            _mainBuilder.Append(!isAnonymousType ? ")" : " }");
+
+            return newExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitNewArray(NewArrayExpression newArrayExpression)
+        {
+            var isComplex = newArrayExpression.Expressions.Count > 1;
+            var appendAction = isComplex ? s => AppendLine(s) : (Action<string>)(s => Append(s));
+
+            appendAction("new " + newArrayExpression.Type.GetElementType()!.ShortDisplayName() + "[]");
+            appendAction("{ ");
+
+            IDisposable? indent = null;
+            if (isComplex)
+            {
+                indent = _mainBuilder.Indent();
+            }
+
+            VisitArguments(newArrayExpression.Expressions, appendAction, lastSeparator: " ");
+
+            if (isComplex)
+            {
+                indent?.Dispose();
+            }
+
+            Append("}");
+
+            return newArrayExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitParameter(ParameterExpression parameterExpression)
+        {
+            if (_parametersInScope.TryGetValue(parameterExpression, out var parameterName))
+            {
+                if (parameterName == null)
+                {
+                    if (!_namelessParameters.Contains(parameterExpression))
+                    {
+                        _namelessParameters.Add(parameterExpression);
+                    }
+
+                    Append("namelessParameter{");
+                    Append(_namelessParameters.IndexOf(parameterExpression).ToString());
+                    Append("}");
+                }
+                else if (parameterName.Contains('.'))
+                {
+                    Append("[");
+                    Append(parameterName);
+                    Append("]");
+                }
+                else
+                {
+                    Append(parameterName);
+                }
+            }
+            else
+            {
+                if (Verbose)
+                {
+                    Append("(Unhandled parameter: ");
+                    Append(parameterExpression.Name ?? "NoNameParameter");
+                    Append(")");
+                }
+                else
+                {
+                    Append(parameterExpression.Name ?? "NoNameParameter");
+                }
+            }
+
+            if (Verbose)
+            {
+                var parameterIndex = _encounteredParameters.Count;
+                if (_encounteredParameters.Contains(parameterExpression))
+                {
+                    parameterIndex = _encounteredParameters.IndexOf(parameterExpression);
+                }
+                else
+                {
+                    _encounteredParameters.Add(parameterExpression);
+                }
+
+                _mainBuilder.Append("{" + parameterIndex + "}");
+            }
+
+            return parameterExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitUnary(UnaryExpression unaryExpression)
+        {
+            // ReSharper disable once SwitchStatementMissingSomeCases
+            switch (unaryExpression.NodeType)
+            {
+                case ExpressionType.Convert:
+                    _mainBuilder.Append("(" + unaryExpression.Type.ShortDisplayName() + ")");
+
+                    if (unaryExpression.Operand is BinaryExpression)
+                    {
+                        _mainBuilder.Append("(");
+                        Visit(unaryExpression.Operand);
+                        _mainBuilder.Append(")");
+                    }
+                    else
+                    {
+                        Visit(unaryExpression.Operand);
+                    }
+
+                    break;
+
+                case ExpressionType.Throw:
+                    _mainBuilder.Append("throw ");
+                    Visit(unaryExpression.Operand);
+                    break;
+
+                case ExpressionType.Not:
+                    _mainBuilder.Append("!(");
+                    Visit(unaryExpression.Operand);
+                    _mainBuilder.Append(")");
+                    break;
+
+                case ExpressionType.TypeAs:
+                    _mainBuilder.Append("(");
+                    Visit(unaryExpression.Operand);
+                    _mainBuilder.Append(" as " + unaryExpression.Type.ShortDisplayName() + ")");
+                    break;
+
+                case ExpressionType.Quote:
+                    Visit(unaryExpression.Operand);
+                    break;
+
+                default:
+                    UnhandledExpressionType(unaryExpression);
+                    break;
+            }
+
+            return unaryExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitDefault(DefaultExpression defaultExpression)
+        {
+            _mainBuilder.Append("default(" + defaultExpression.Type.ShortDisplayName() + ")");
+
+            return defaultExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitTry(TryExpression tryExpression)
+        {
+            _mainBuilder.Append("try { ");
+            Visit(tryExpression.Body);
+            _mainBuilder.Append(" } ");
+
+            foreach (var handler in tryExpression.Handlers)
+            {
+                _mainBuilder.Append("catch (" + handler.Test.Name + ") { ... } ");
+            }
+
+            return tryExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitIndex(IndexExpression indexExpression)
+        {
+            Visit(indexExpression.Object);
+            _mainBuilder.Append("[");
+            VisitArguments(
+                indexExpression.Arguments, s => { _mainBuilder.Append(s); });
+            _mainBuilder.Append("]");
+
+            return indexExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitTypeBinary(TypeBinaryExpression typeBinaryExpression)
+        {
+            _mainBuilder.Append("(");
+            Visit(typeBinaryExpression.Expression);
+            _mainBuilder.Append(" is " + typeBinaryExpression.TypeOperand.ShortDisplayName() + ")");
+
+            return typeBinaryExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitSwitch(SwitchExpression switchExpression)
+        {
+            _mainBuilder.Append("switch (");
+            Visit(switchExpression.SwitchValue);
+            _mainBuilder.AppendLine(")");
+            _mainBuilder.AppendLine("{");
+            _mainBuilder.IncrementIndent();
+
+            foreach (var @case in switchExpression.Cases)
+            {
+                foreach (var testValue in @case.TestValues)
+                {
+                    _mainBuilder.Append("case ");
+                    Visit(testValue);
+                    _mainBuilder.AppendLine(": ");
+                }
+
+                using (_mainBuilder.Indent())
+                {
+                    Visit(@case.Body);
+                }
+
+                _mainBuilder.AppendLine();
+            }
+
+            if (switchExpression.DefaultBody != null)
+            {
+                _mainBuilder.AppendLine("default: ");
+                using (_mainBuilder.Indent())
+                {
+                    Visit(switchExpression.DefaultBody);
+                }
+
+                _mainBuilder.AppendLine();
+            }
+
+            _mainBuilder.DecrementIndent();
+            _mainBuilder.AppendLine("}");
+
+            return switchExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitInvocation(InvocationExpression invocationExpression)
+        {
+            _mainBuilder.Append("Invoke(");
+            Visit(invocationExpression.Expression);
+
+            foreach (var argument in invocationExpression.Arguments)
+            {
+                _mainBuilder.Append(", ");
+                Visit(argument);
+            }
+
+            _mainBuilder.Append(")");
+
+            return invocationExpression;
+        }
+
+        /// <inheritdoc />
+        protected override Expression VisitExtension(Expression extensionExpression)
+        {
+            if (extensionExpression is IPrintableExpression printable)
+            {
+                printable.Print(this);
+            }
+            else
+            {
+                UnhandledExpressionType(extensionExpression);
+            }
+
+            return extensionExpression;
+        }
+
+        private void VisitArguments(
+            IReadOnlyList<Expression> arguments,
+            Action<string> appendAction,
+            string lastSeparator = "",
+            bool areConnected = false)
+        {
+            for (var i = 0; i < arguments.Count; i++)
+            {
+                if (areConnected && i == arguments.Count - 1)
+                {
+                    Append("");
+                }
+
+                Visit(arguments[i]);
+                appendAction(i == arguments.Count - 1 ? lastSeparator : ", ");
+            }
+        }
+
+        private static string PostProcess(string printedExpression)
+        {
+            var processedPrintedExpression = printedExpression
+                .Replace("Microsoft.EntityFrameworkCore.Query.", "")
+                .Replace("Microsoft.EntityFrameworkCore.", "")
+                .Replace(Environment.NewLine + Environment.NewLine, Environment.NewLine);
+
+            return processedPrintedExpression;
+        }
+
+        private void UnhandledExpressionType(Expression expression)
+            => AppendLine(expression.ToString());
     }
 }
