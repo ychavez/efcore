@@ -2,11 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text;
-using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Design.Internal;
 using Microsoft.EntityFrameworkCore.Internal;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using Microsoft.VisualBasic;
 
 namespace Microsoft.EntityFrameworkCore.Scaffolding.Internal;
 
@@ -824,32 +822,6 @@ public class CSharpRuntimeModelCodeGenerator : ICompiledModelCodeGenerator
                 .Append(_code.Reference(valueComparerType))
                 .Append("()");
         }
-        else
-        {
-            var valueComparer = property.GetValueComparer();
-            valueComparerType = valueComparer.GetType();
-            if (valueComparerType.IsGenericType
-                && valueComparerType.GetGenericTypeDefinition() == typeof(ValueComparer<>))
-            {
-                AddNamespace(valueComparerType, parameters.Namespaces);
-                mainBuilder.AppendLine(",")
-                    .Append("valueComparer: new ")
-                    .Append(_code.Reference(valueComparerType))
-                    .Append("(");
-                Append(mainBuilder, valueComparer.EqualsExpression, parameters.Namespaces)
-                    .Append(", ");
-                Append(mainBuilder, valueComparer.HashCodeExpression, parameters.Namespaces)
-                    .Append(", ");
-                Append(mainBuilder, valueComparer.SnapshotExpression, parameters.Namespaces)
-                    .Append(")");
-                //keyValueComparer
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"Unexpected comparer {valueComparerType.DisplayName()} for {property.DeclaringEntityType.DisplayName()}.{property.Name}");
-            }
-        }
 
         if (providerValueComparerType != null)
         {
@@ -1452,10 +1424,5 @@ public class CSharpRuntimeModelCodeGenerator : ICompiledModelCodeGenerator
         {
             AddNamespace(sequenceType, namespaces);
         }
-    }
-
-    private IndentedStringBuilder Append(IndentedStringBuilder stringBuilder, Expression? expression, ISet<string> namespaces)
-    {
-        throw new NotImplementedException();
     }
 }

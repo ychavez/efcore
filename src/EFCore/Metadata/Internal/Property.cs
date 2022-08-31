@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics.CodeAnalysis;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Internal;
 
 namespace Microsoft.EntityFrameworkCore.Metadata.Internal;
@@ -971,7 +970,7 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
         var newEqualsParam2 = Expression.Parameter(ClrType, "v2");
         var newHashCodeParam = Expression.Parameter(ClrType, "v");
         var newSnapshotParam = Expression.Parameter(ClrType, "v");
-        var hasValueProperty = ClrType.GetProperty("HasValue")!;
+        var hasValueMethod = ClrType.GetMethod("get_HasValue")!;
         var v1HasValue = Expression.Parameter(typeof(bool), "v1HasValue");
         var v2HasValue = Expression.Parameter(typeof(bool), "v2HasValue");
 
@@ -981,8 +980,8 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
                 Expression.Block(
                     typeof(bool),
                     new[] { v1HasValue, v2HasValue },
-                    Expression.Assign(v1HasValue, Expression.MakeMemberAccess(newEqualsParam1, hasValueProperty)),
-                    Expression.Assign(v2HasValue, Expression.MakeMemberAccess(newEqualsParam2, hasValueProperty)),
+                    Expression.Assign(v1HasValue, Expression.Call(newEqualsParam1, hasValueMethod)),
+                    Expression.Assign(v2HasValue, Expression.Call(newEqualsParam2, hasValueMethod)),
                     Expression.OrElse(
                         Expression.AndAlso(
                             v1HasValue,
@@ -997,14 +996,14 @@ public class Property : PropertyBase, IMutableProperty, IConventionProperty, IPr
                 newEqualsParam1, newEqualsParam2),
             Expression.Lambda(
                 Expression.Condition(
-                    Expression.MakeMemberAccess(newHashCodeParam, hasValueProperty),
+                    Expression.Call(newHashCodeParam, hasValueMethod),
                     valueComparer.ExtractHashCodeBody(
                         Expression.Convert(newHashCodeParam, valueComparer.Type)),
                     Expression.Constant(0, typeof(int))),
                 newHashCodeParam),
             Expression.Lambda(
                 Expression.Condition(
-                    Expression.MakeMemberAccess(newSnapshotParam, hasValueProperty),
+                    Expression.Call(newSnapshotParam, hasValueMethod),
                     Expression.Convert(
                         valueComparer.ExtractSnapshotBody(
                             Expression.Convert(newSnapshotParam, valueComparer.Type)), ClrType),
