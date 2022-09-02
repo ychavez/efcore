@@ -101,14 +101,68 @@ public partial class NavigationExpandingExpressionVisitor : ExpressionVisitor
     {
         var result = Visit(query);
 
-        if (result is GroupByNavigationExpansionExpression)
+        if (result is GroupByNavigationExpansionExpression groupByNavigationExpansionExpression)
         {
-            // This indicates that GroupBy was not condensed out of grouping operator.
-            throw new InvalidOperationException(CoreStrings.TranslationFailed(query.Print()));
-        }
+            if (!(groupByNavigationExpansionExpression.Source is MethodCallExpression methodCallExpression
+                && methodCallExpression.Method.IsGenericMethod
+                && methodCallExpression.Method.GetGenericMethodDefinition() == QueryableMethods.GroupByWithKeySelector))
+            {
+                // If the final operator is not GroupBy in source then GroupBy is not final operator. We throw exception.
+                throw new InvalidOperationException(CoreStrings.TranslationFailed(query.Print()));
+            }
 
-        result = new PendingSelectorExpandingExpressionVisitor(this, _extensibilityHelper, applyIncludes: true).Visit(result);
-        result = Reduce(result);
+            var groupingQueryable = groupByNavigationExpansionExpression.GroupingEnumerable.Source;
+            var innerEnumerable = new PendingSelectorExpandingExpressionVisitor(this, _extensibilityHelper, applyIncludes: true).Visit(
+                groupByNavigationExpansionExpression.GroupingEnumerable);
+            innerEnumerable = Reduce(innerEnumerable);
+
+            if (innerEnumerable is MethodCallExpression selectMethodCall
+                && selectMethodCall.Method.IsGenericMethod
+                && selectMethodCall.Method.GetGenericMethodDefinition() == QueryableMethods.Select)
+            {
+                var elementSelector = selectMethodCall.Arguments[1];
+                var elementSelectorLambda = elementSelector.UnwrapLambdaFromQuote();
+
+                // We do have element selector to inject which may have potentially expanded navigations
+                var oldKeySelectorLambda = methodCallExpression.Arguments[1].UnwrapLambdaFromQuote();
+                var newSource = ReplacingExpressionVisitor.Replace(
+                    groupingQueryable, methodCallExpression.Arguments[0], selectMethodCall.Arguments[0]);
+
+                var oldKeySelectorParameterType = oldKeySelectorLambda.Parameters[0].Type;
+                var keySelectorParameter = Expression.Parameter(elementSelectorLambda.Parameters[0].Type);
+                var keySelectorMemberAccess = (Expression)keySelectorParameter;
+                while (keySelectorMemberAccess.Type != oldKeySelectorParameterType)
+                {
+                    keySelectorMemberAccess = Expression.MakeMemberAccess(
+                        keySelectorMemberAccess,
+                        keySelectorMemberAccess.Type.GetTypeInfo().GetDeclaredField("Outer")!);
+                }
+
+                var keySelectorLambda = Expression.Lambda(
+                    ReplacingExpressionVisitor.Replace(
+                        oldKeySelectorLambda.Parameters[0], keySelectorMemberAccess, oldKeySelectorLambda.Body),
+                    keySelectorParameter);
+
+                result = Expression.Call(
+                    QueryableMethods.GroupByWithKeyElementSelector.MakeGenericMethod(
+                        newSource.Type.GetSequenceType(),
+                        keySelectorLambda.ReturnType,
+                        elementSelectorLambda.ReturnType),
+                    newSource,
+                    Expression.Quote(keySelectorLambda),
+                    elementSelector);
+            }
+            else
+            {
+                // Pending selector was identity so nothing to apply, we can return source as-is.
+                result = groupByNavigationExpansionExpression.Source;
+            }
+        }
+        else
+        {
+            result = new PendingSelectorExpandingExpressionVisitor(this, _extensibilityHelper, applyIncludes: true).Visit(result);
+            result = Reduce(result);
+        }
 
         var dbContextOnQueryContextPropertyAccess =
             Expression.Convert(
@@ -1081,7 +1135,7 @@ public partial class NavigationExpandingExpressionVisitor : ExpressionVisitor
                 {
                     return (currentExpression, default);
                 }
-                
+
                 if (!methodCallExpression.Method.IsGenericMethod
                     || !SupportedFilteredIncludeOperations.Contains(methodCallExpression.Method.GetGenericMethodDefinition()))
                 {
@@ -2083,9 +2137,9 @@ public partial class NavigationExpandingExpressionVisitor : ExpressionVisitor
         }
 
         throw new InvalidOperationException(CoreStrings.InvalidIncludeExpression(expression));
-        
+
         bool TryExtractIncludeTreeNode(
-            Expression innerExpression, 
+            Expression innerExpression,
             string propertyName,
             [NotNullWhen(true)] out IncludeTreeNode? addedNode)
         {
@@ -2106,7 +2160,7 @@ public partial class NavigationExpandingExpressionVisitor : ExpressionVisitor
 
             var navigation = (INavigationBase?)entityType.FindNavigation(propertyName)
                 ?? entityType.FindSkipNavigation(propertyName);
-                
+
             if (navigation != null)
             {
                 addedNode = innerIncludeTreeNode.AddNavigation(navigation, setLoaded);

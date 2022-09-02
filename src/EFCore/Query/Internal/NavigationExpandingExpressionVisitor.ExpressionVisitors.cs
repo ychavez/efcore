@@ -1132,7 +1132,7 @@ public partial class NavigationExpandingExpressionVisitor
             GroupByNavigationExpansionExpression groupByNavigationExpansionExpression)
         {
             _parameterExpression = parameterExpression;
-            _navigationExpansionExpression = (NavigationExpansionExpression)groupByNavigationExpansionExpression.GroupingEnumerable;
+            _navigationExpansionExpression = groupByNavigationExpansionExpression.GroupingEnumerable;
             _keyAccessExpression = Expression.MakeMemberAccess(
                 groupByNavigationExpansionExpression.CurrentParameter,
                 groupByNavigationExpansionExpression.CurrentParameter.Type.GetTypeInfo().GetDeclaredProperty(
