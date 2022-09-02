@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Data;
+using Microsoft.EntityFrameworkCore.Diagnostics.Internal;
 
 #nullable enable
 
@@ -556,6 +557,59 @@ public partial class RelationalModelBuilderTest : ModelBuilderTest
 
     public abstract class RelationalOneToManyTestBase : OneToManyTestBase
     {
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_covered_by_filtered_composite_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<BigMak>();
+            modelBuilder.Entity<Pickle>();
+            modelBuilder.Ignore<Bun>();
+
+            modelBuilder
+                .Entity<BigMak>().HasMany(e => e.Pickles).WithOne(e => e.BigMak)
+                .HasForeignKey(e => e.BurgerId);
+
+            modelBuilder.Entity<Pickle>().HasIndex(e => new { e.BurgerId, e.AnotherProp }).HasFilter("Filter");
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(Pickle))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(
+                new[] { nameof(Ingredient.BurgerId) },
+                indexes.Single(i => i.Properties.Count == 1).Properties.Select(e => e.Name).ToArray());
+
+            Assert.Equal(
+                new[] { nameof(Ingredient.BurgerId), nameof(Ingredient.AnotherProp) },
+                indexes.Single(i => i.Properties.Count == 2).Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_covered_by_filtered_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<BigMak>();
+            modelBuilder.Entity<Pickle>();
+            modelBuilder.Ignore<Bun>();
+
+            modelBuilder
+                .Entity<BigMak>().HasMany(e => e.Pickles).WithOne(e => e.BigMak)
+                .HasForeignKey(e => e.BurgerId);
+
+            modelBuilder.Entity<Pickle>().HasIndex(e => new { e.BurgerId }).HasFilter("Filter");
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(Pickle))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(new[] { nameof(Ingredient.BurgerId) }, indexes[0].Properties.Select(e => e.Name).ToArray());
+            Assert.Equal(new[] { nameof(Ingredient.BurgerId) }, indexes[1].Properties.Select(e => e.Name).ToArray());
+            Assert.Equal("Filter", indexes.Single(i => i.GetFilter() != null).GetFilter());
+        }
     }
 
     public abstract class RelationalManyToOneTestBase : ManyToOneTestBase
@@ -564,6 +618,55 @@ public partial class RelationalModelBuilderTest : ModelBuilderTest
 
     public abstract class RelationalOneToOneTestBase : OneToOneTestBase
     {
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_covered_by_filtered_composite_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<Customer>();
+            modelBuilder
+                .Entity<CustomerDetails>().HasOne(d => d.Customer).WithOne(c => c.Details)
+                .HasForeignKey<CustomerDetails>(c => c.CustomerId);
+            modelBuilder.Ignore<Order>();
+
+            modelBuilder.Entity<CustomerDetails>().HasIndex(e => new { e.CustomerId, e.AnotherProp }).HasFilter("Filter");
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(CustomerDetails))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.CustomerId) },
+                indexes.Single(i => i.Properties.Count == 1).Properties.Select(e => e.Name).ToArray());
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.CustomerId), nameof(CustomerDetails.AnotherProp) },
+                indexes.Single(i => i.Properties.Count == 2).Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_covered_by_filtered_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<Customer>();
+            modelBuilder
+                .Entity<CustomerDetails>().HasOne(d => d.Customer).WithOne(c => c.Details)
+                .HasForeignKey<CustomerDetails>(c => c.CustomerId);
+            modelBuilder.Ignore<Order>();
+
+            modelBuilder.Entity<CustomerDetails>().HasIndex(e => new { e.CustomerId }).HasFilter("Filter");
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(CustomerDetails))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(new[] { nameof(CustomerDetails.CustomerId) }, indexes[0].Properties.Select(e => e.Name).ToArray());
+            Assert.Equal(new[] { nameof(CustomerDetails.CustomerId) }, indexes[1].Properties.Select(e => e.Name).ToArray());
+            Assert.Equal("Filter", indexes.Single(i => i.GetFilter() != null).GetFilter());
+        }
     }
 
     public abstract class RelationalManyToManyTestBase : ManyToManyTestBase

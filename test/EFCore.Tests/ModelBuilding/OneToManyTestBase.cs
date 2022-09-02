@@ -11,6 +11,59 @@ public abstract partial class ModelBuilderTest
     public abstract class OneToManyTestBase : ModelBuilderTestBase
     {
         [ConditionalFact]
+        public virtual void FK_index_is_removed_when_covered_by_composite_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<BigMak>();
+            modelBuilder.Entity<Pickle>();
+            modelBuilder.Ignore<Bun>();
+
+            modelBuilder
+                .Entity<BigMak>().HasMany(e => e.Pickles).WithOne(e => e.BigMak)
+                .HasForeignKey(e => e.BurgerId);
+
+            modelBuilder.Entity<Pickle>().HasIndex(e => new { e.BurgerId, e.AnotherProp });
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(Pickle))!.GetIndexes().ToList();
+            Assert.Equal(1, indexes.Count);
+            Assert.Equal(
+                new[] { nameof(Ingredient.BurgerId), nameof(Ingredient.AnotherProp) },
+                indexes[0].Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_composite_index_does_not_start_with_FK_property()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<BigMak>();
+            modelBuilder.Entity<Pickle>();
+            modelBuilder.Ignore<Bun>();
+
+            modelBuilder
+                .Entity<BigMak>().HasMany(e => e.Pickles).WithOne(e => e.BigMak)
+                .HasForeignKey(e => e.BurgerId);
+
+            modelBuilder.Entity<Pickle>().HasIndex(e => new { e.AnotherProp, e.BurgerId });
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(Pickle))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(
+                new[] { nameof(Ingredient.BurgerId) },
+                indexes.Single(i => i.Properties.Count == 1).Properties.Select(e => e.Name).ToArray());
+
+            Assert.Equal(
+                new[] { nameof(Ingredient.AnotherProp), nameof(Ingredient.BurgerId) },
+                indexes.Single(i => i.Properties.Count == 2).Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
         public virtual void Finds_existing_navigations_and_uses_associated_FK()
         {
             var modelBuilder = CreateModelBuilder();

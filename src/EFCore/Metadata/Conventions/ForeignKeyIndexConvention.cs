@@ -186,7 +186,7 @@ public class ForeignKeyIndexConvention :
                 else
                 {
                     var coveringIndex = baseIndexes!.FirstOrDefault(
-                        i => AreIndexedBy(foreignKey.Properties, foreignKey.IsUnique, i.Properties, i.IsUnique));
+                        i => AreIndexedBy(foreignKey.Properties, foreignKey.IsUnique, i));
                     if (coveringIndex != null)
                     {
                         RemoveIndex(index);
@@ -206,7 +206,7 @@ public class ForeignKeyIndexConvention :
         var index = indexBuilder.Metadata;
         foreach (var otherIndex in index.DeclaringEntityType.GetDerivedTypesInclusive()
                      .SelectMany(t => t.GetDeclaredIndexes())
-                     .Where(i => i != index && AreIndexedBy(i.Properties, i.IsUnique, index.Properties, index.IsUnique)).ToList())
+                     .Where(i => i != index && AreIndexedBy(i.Properties, i.IsUnique, index)).ToList())
         {
             RemoveIndex(otherIndex);
         }
@@ -222,10 +222,16 @@ public class ForeignKeyIndexConvention :
         IConventionEntityTypeBuilder entityTypeBuilder,
         IConventionIndex index,
         IConventionContext<IConventionIndex> context)
+        => RebuildForeignKeyIndexes(index);
+
+    /// <summary>
+    ///     Re-builds foreign key indexes after an index has been removed or may otherwise no longer cover the foreign key index.
+    /// </summary>
+    /// <param name="index">The removed or modified index.</param>
+    public virtual void RebuildForeignKeyIndexes(IConventionIndex index)
     {
         foreach (var foreignKey in index.DeclaringEntityType.GetDerivedTypesInclusive()
-                     .SelectMany(t => t.GetDeclaredForeignKeys())
-                     .Where(fk => AreIndexedBy(fk.Properties, fk.IsUnique, index.Properties, index.IsUnique)))
+                     .SelectMany(t => t.GetDeclaredForeignKeys()))
         {
             CreateIndex(foreignKey.Properties, foreignKey.IsUnique, foreignKey.DeclaringEntityType.Builder);
         }
@@ -262,7 +268,7 @@ public class ForeignKeyIndexConvention :
                 }
 
                 var coveringIndex = foreignKey.DeclaringEntityType.GetIndexes()
-                    .FirstOrDefault(i => AreIndexedBy(foreignKey.Properties, false, i.Properties, i.IsUnique));
+                    .FirstOrDefault(i => AreIndexedBy(foreignKey.Properties, false, i));
                 if (coveringIndex != null)
                 {
                     RemoveIndex(index);
@@ -288,7 +294,7 @@ public class ForeignKeyIndexConvention :
         {
             foreach (var otherIndex in index.DeclaringEntityType.GetDerivedTypesInclusive()
                          .SelectMany(t => t.GetDeclaredIndexes())
-                         .Where(i => i != index && AreIndexedBy(i.Properties, i.IsUnique, index.Properties, coveringIndexUnique: true))
+                         .Where(i => i != index && AreIndexedBy(i.Properties, i.IsUnique, index))
                          .ToList())
             {
                 RemoveIndex(otherIndex);
@@ -300,7 +306,7 @@ public class ForeignKeyIndexConvention :
                          .SelectMany(t => t.GetDeclaredForeignKeys())
                          .Where(
                              fk => fk.IsUnique
-                                 && AreIndexedBy(fk.Properties, fk.IsUnique, index.Properties, coveringIndexUnique: true)))
+                                 && AreIndexedBy(fk.Properties, fk.IsUnique, index)))
             {
                 CreateIndex(foreignKey.Properties, foreignKey.IsUnique, foreignKey.DeclaringEntityType.Builder);
             }
@@ -329,7 +335,7 @@ public class ForeignKeyIndexConvention :
 
         foreach (var existingIndex in entityTypeBuilder.Metadata.GetIndexes())
         {
-            if (AreIndexedBy(properties, unique, existingIndex.Properties, existingIndex.IsUnique))
+            if (AreIndexedBy(properties, unique, existingIndex))
             {
                 return null;
             }
@@ -349,9 +355,23 @@ public class ForeignKeyIndexConvention :
     /// </summary>
     /// <param name="properties">The properties to check.</param>
     /// <param name="unique">Whether the index to create should be unique.</param>
-    /// <param name="coveringIndexProperties">The properties of an existing index.</param>
-    /// <param name="coveringIndexUnique">Whether the existing index is unique.</param>
+    /// <param name="existingIndex">The existing index</param>
     /// <returns><see langword="true" /> if the existing index covers the given properties.</returns>
+    protected virtual bool AreIndexedBy(
+        IReadOnlyList<IConventionProperty> properties,
+        bool unique,
+        IConventionIndex existingIndex)
+        => (!unique && existingIndex.Properties.Select(p => p.Name).StartsWith(properties.Select(p => p.Name)))
+            || (unique && existingIndex.IsUnique && existingIndex.Properties.SequenceEqual(properties));
+
+    /// <summary>
+    ///     Returns a value indicating whether the given properties are already covered by properties of a key or foreign key.
+    /// </summary>
+    /// <param name="properties">The properties to check.</param>
+    /// <param name="unique">Whether the index to create should be unique.</param>
+    /// <param name="coveringIndexProperties">The properties of an existing key or foreign key.</param>
+    /// <param name="coveringIndexUnique">Whether the existing key or foreign key is unique.</param>
+    /// <returns><see langword="true" /> if the existing key or foreign key covers the given properties.</returns>
     protected virtual bool AreIndexedBy(
         IReadOnlyList<IConventionProperty> properties,
         bool unique,
@@ -393,9 +413,7 @@ public class ForeignKeyIndexConvention :
 
                 foreach (var existingIndex in entityType.GetIndexes())
                 {
-                    if (AreIndexedBy(
-                            declaredForeignKey.Properties, declaredForeignKey.IsUnique, existingIndex.Properties,
-                            existingIndex.IsUnique))
+                    if (AreIndexedBy(declaredForeignKey.Properties, declaredForeignKey.IsUnique, existingIndex))
                     {
                         if (declaredForeignKey.Properties.Count != existingIndex.Properties.Count)
                         {

@@ -12,6 +12,60 @@ public abstract partial class ModelBuilderTest
     public abstract class OneToOneTestBase : ModelBuilderTestBase
     {
         [ConditionalFact]
+        public virtual void Unique_FK_index_is_not_removed_when_covered_by_composite_index()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<Customer>();
+            modelBuilder
+                .Entity<CustomerDetails>().HasOne(d => d.Customer).WithOne(c => c.Details)
+                .HasForeignKey<CustomerDetails>(c => c.CustomerId);
+            modelBuilder.Ignore<Order>();
+
+            modelBuilder.Entity<CustomerDetails>().HasIndex(e => new { e.CustomerId, e.AnotherProp });
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(CustomerDetails))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.CustomerId) },
+                indexes.Single(i => i.Properties.Count == 1).Properties.Select(e => e.Name).ToArray());
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.CustomerId), nameof(CustomerDetails.AnotherProp) },
+                indexes.Single(i => i.Properties.Count == 2).Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
+        public virtual void FK_index_is_not_removed_when_composite_index_does_not_start_with_FK_property()
+        {
+            var modelBuilder = CreateModelBuilder();
+            var model = modelBuilder.Model;
+            modelBuilder.Entity<Customer>();
+            modelBuilder
+                .Entity<CustomerDetails>().HasOne(d => d.Customer).WithOne(c => c.Details)
+                .HasForeignKey<CustomerDetails>(c => c.CustomerId);
+            modelBuilder.Ignore<Order>();
+
+            modelBuilder.Entity<CustomerDetails>().HasIndex(e => new { e.AnotherProp, e.CustomerId });
+
+            modelBuilder.FinalizeModel();
+
+            var indexes = model.FindEntityType(typeof(CustomerDetails))!.GetIndexes().ToList();
+            Assert.Equal(2, indexes.Count);
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.CustomerId) },
+                indexes.Single(i => i.Properties.Count == 1).Properties.Select(e => e.Name).ToArray());
+
+            Assert.Equal(
+                new[] { nameof(CustomerDetails.AnotherProp), nameof(CustomerDetails.CustomerId) },
+                indexes.Single(i => i.Properties.Count == 2).Properties.Select(e => e.Name).ToArray());
+        }
+
+        [ConditionalFact]
         public virtual void Finds_existing_navigations_and_uses_associated_FK()
         {
             var modelBuilder = CreateModelBuilder();

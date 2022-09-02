@@ -83,6 +83,7 @@ public abstract class RelationalConventionSetBuilder : ProviderConventionSetBuil
         conventionSet.Replace<QueryFilterRewritingConvention>(
             new RelationalQueryFilterRewritingConvention(Dependencies, RelationalDependencies));
         conventionSet.Replace<RuntimeModelConvention>(new RelationalRuntimeModelConvention(Dependencies, RelationalDependencies));
+        conventionSet.Replace<ForeignKeyIndexConvention>(new RelationalForeignKeyIndexConvention(Dependencies));
 
         return conventionSet;
     }

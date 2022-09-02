@@ -29,6 +29,7 @@ public abstract partial class ModelBuilderTest
         public static readonly PropertyInfo BurgerIdProperty = typeof(Ingredient).GetProperty("BurgerId")!;
 
         public int Id { get; set; }
+        public int? AnotherProp { get; set; }
         public int? BurgerId { get; set; }
         public BigMak? BigMak { get; set; }
     }
@@ -116,6 +117,7 @@ public abstract partial class ModelBuilderTest
     protected class DetailsBase
     {
         public int Id { get; set; }
+        public int? AnotherProp { get; set; }
     }
 
     protected class CustomerDetails : DetailsBase, INotifyPropertyChanged

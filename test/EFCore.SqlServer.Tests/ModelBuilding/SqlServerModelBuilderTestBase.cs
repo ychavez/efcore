@@ -1062,6 +1062,7 @@ public class SqlServerModelBuilderTestBase : RelationalModelBuilderTest
                 .ToTable("OtherCustomerDetails", tb =>
                     tb.HasCheckConstraint("CK_CustomerDetails_T", "AlternateKey <> 0").HasName("CK_Guid"));
             ownedBuilder.Property(d => d.CustomerId);
+            ownedBuilder.Ignore(d => d.AnotherProp);
             ownedBuilder.HasIndex(d => d.CustomerId);
             ownedBuilder.WithOwner(d => (OtherCustomer?)d.Customer)
                 .HasPrincipalKey(c => c.AlternateKey);
@@ -1072,6 +1073,7 @@ public class SqlServerModelBuilderTestBase : RelationalModelBuilderTest
                     b.ToTable("SpecialCustomerDetails", tb =>
                         tb.HasCheckConstraint("CK_CustomerDetails_T", "AlternateKey <> 0").HasName("CK_Guid"));
                     b.Property(d => d.CustomerId);
+                    b.Ignore(d => d.AnotherProp);
                     b.HasIndex(d => d.CustomerId);
                     b.WithOwner(d => (SpecialCustomer?)d.Customer)
                         .HasPrincipalKey(c => c.AlternateKey);
@@ -1128,7 +1130,7 @@ public class SqlServerModelBuilderTestBase : RelationalModelBuilderTest
             var owner = model.FindEntityType(typeof(Customer))!;
             var owned = owner.FindNavigation(nameof(Customer.Details))!.ForeignKey.DeclaringEntityType;
             Assert.Equal(
-                new[] { nameof(CustomerDetails.Id), nameof(CustomerDetails.CustomerId) },
+                new[] { nameof(CustomerDetails.Id), nameof(CustomerDetails.AnotherProp), nameof(CustomerDetails.CustomerId) },
                 owned.GetProperties().Select(p => p.Name).ToArray());
             Assert.Equal(nameof(CustomerDetails.Id), owned.FindPrimaryKey()!.Properties.Single().Name);
         }
