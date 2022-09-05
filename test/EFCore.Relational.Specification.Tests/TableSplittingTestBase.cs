@@ -351,7 +351,7 @@ public abstract class TableSplittingTestBase : NonSharedModelTestBase
         }
     }
 
-    [ConditionalFact(Skip = "Issue #24970")]
+    [ConditionalFact]
     public virtual async Task Can_insert_dependent_with_just_one_parent()
     {
         await InitializeAsync(OnModelCreating);
@@ -371,8 +371,33 @@ public abstract class TableSplittingTestBase : NonSharedModelTestBase
                 FuelType = "Gas",
                 VehicleName = "Fuel transport"
             });
+        context.Add(
+            new ContinuousCombustionEngine
+            {
+                VehicleName = "Fuel transport",
+                Description = "Engine"
+            });
+
+        var addedEntries = context.ChangeTracker.Entries().ToList();
+        Assert.Equal(4, addedEntries.Count);
+        Assert.All(addedEntries, e => Assert.Equal(EntityState.Added, e.State));
 
         context.SaveChanges();
+
+        var savedEntries = context.ChangeTracker.Entries().ToList();
+        Assert.Equal(4, savedEntries.Count);
+        Assert.All(savedEntries, e => Assert.Equal(EntityState.Unchanged, e.State));
+
+        context.ChangeTracker.Clear();
+
+        var vehicle = context.Set<FuelTank>()
+            .Include(e => e.Vehicle).ThenInclude(e => e.Operator)
+            .Include(e => e.Vehicle).ThenInclude(e => e.Engine)
+            .Single(e => e.VehicleName == "Fuel transport");
+
+        var loadedEntries = context.ChangeTracker.Entries().ToList();
+        Assert.Equal(4, loadedEntries.Count);
+        Assert.All(loadedEntries, e => Assert.Equal(EntityState.Unchanged, e.State));
     }
 
     [ConditionalFact]
