@@ -601,7 +601,7 @@ public class QueryableMethodNormalizingExpressionVisitor : ExpressionVisitor
         return methodCallExpression;
     }
 
-    private class GroupJoinConvertingExpressionVisitor : ExpressionVisitor
+    private sealed class GroupJoinConvertingExpressionVisitor : ExpressionVisitor
     {
         protected override Expression VisitMethodCall(MethodCallExpression methodCallExpression)
         {
