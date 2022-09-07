@@ -21,7 +21,6 @@ namespace Microsoft.EntityFrameworkCore.Metadata.Internal
             => property.FindContainingPrimaryKey() is IReadOnlyKey key
                 && key.Properties.Count > 1
                 && !property.IsForeignKey()
-                && property.IsShadowProperty()
                 && property.ClrType == typeof(int)
                 && property.GetJsonPropertyName() == null;
     }

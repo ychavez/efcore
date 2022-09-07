@@ -97,7 +97,7 @@ public class RelationalValueGenerationConvention :
                         null);
                 }
                 break;
-            
+
             case RelationalAnnotationNames.TableName:
                 var schema = entityType.GetSchema();
                 ProcessTableChanged(
@@ -107,7 +107,7 @@ public class RelationalValueGenerationConvention :
                     entityType.GetTableName(),
                     schema);
                 break;
-                
+
             case RelationalAnnotationNames.Schema:
                 var tableName = entityType.GetTableName();
                 ProcessTableChanged(
@@ -117,7 +117,7 @@ public class RelationalValueGenerationConvention :
                     tableName,
                     entityTypeBuilder.Metadata.GetSchema());
                 break;
-            
+
             case RelationalAnnotationNames.MappingStrategy:
                 var primaryKey = entityTypeBuilder.Metadata.FindPrimaryKey();
                 if (primaryKey == null)
@@ -183,13 +183,15 @@ public class RelationalValueGenerationConvention :
             ? null
             : table.Name != null
                 ? GetValueGenerated(property, table)
-                : property.DeclaringEntityType.IsMappedToJson() && !property.DeclaringEntityType.FindOwnership()!.IsUnique && property.IsOrdinalKeyProperty()
-                    ? ValueGenerated.OnAdd
+                : property.DeclaringEntityType.IsMappedToJson()
+                    && !property.DeclaringEntityType.FindOwnership()!.IsUnique
+                    && property.IsOrdinalKeyProperty()
+                    ? ValueGenerated.OnAddOrUpdate
                     : property.GetMappedStoreObjects(StoreObjectType.InsertStoredProcedure).Any()
                         ? GetValueGenerated((IReadOnlyProperty)property)
                         : null;
     }
-    
+
     /// <summary>
     ///     Checks whether or not the mapping strategy and property allow value generation by convention.
     /// </summary>
